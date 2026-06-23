@@ -796,11 +796,192 @@
     el('m-pipeline','R$ '+pipeline.toLocaleString('pt-BR'));
   }
 
+  let _dashPeriodo = 'mensal';
+
+  window.switchDashPeriodo = (periodo) => {
+    _dashPeriodo = periodo;
+    document.getElementById('dash-btn-mensal').classList.toggle('active', periodo==='mensal');
+    document.getElementById('dash-btn-anual').classList.toggle('active', periodo==='anual');
+    document.getElementById('dash-btn-mensal').style.color = periodo==='mensal'?'#fff':'rgba(255,255,255,.6)';
+    document.getElementById('dash-btn-anual').style.color = periodo==='anual'?'#fff':'rgba(255,255,255,.6)';
+    renderDashboard();
+  };
+
+  function getMesFiltro(p, dataKey) {
+    const now = new Date();
+    const mes = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}`;
+    const ano = `${now.getFullYear()}`;
+    if(p.mesGanho) {
+      return _dashPeriodo==='mensal' ? p.mesGanho===mes : p.mesGanho.startsWith(ano);
+    }
+    const dataRef = p[dataKey]||(p.criadoEm?.toDate?p.criadoEm.toDate().toISOString():p.criadoEm)||'';
+    if(!dataRef) return true;
+    const d = new Date(dataRef);
+    if(_dashPeriodo==='mensal') {
+      return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`===mes;
+    }
+    return d.getFullYear()===now.getFullYear();
+  }
+
   function renderDashboard(){
     const hoje = new Date();
     const hojeStr = hoje.toISOString().split('T')[0];
-    const ativas = propostas.filter(p=>!p.arquivada&&Number(p.etapa)<6);
+    const now = new Date();
+    const mesesNomes = ['Janeiro','Fevereiro','Março','Abril','Maio','Junho','Julho','Agosto','Setembro','Outubro','Novembro','Dezembro'];
+    const periodoLabel = _dashPeriodo==='mensal'
+      ? `${mesesNomes[now.getMonth()]} ${now.getFullYear()}`
+      : `Ano ${now.getFullYear()}`;
+    const elPL = document.getElementById('dash-periodo-label');
+    if(elPL) elPL.textContent = periodoLabel;
+
     const ganhas = propostas.filter(p=>Number(p.etapa)===6);
+    const perdidas = propostas.filter(p=>Number(p.etapa)===7);
+    const ativas = propostas.filter(p=>!p.arquivada&&Number(p.etapa)<6);
+
+    // KPI: Faturamento contratado no período
+    const ganhasPeriodo = ganhas.filter(p=>getMesFiltro(p,'dataGanho'));
+    const faturamento = ganhasPeriodo.reduce((a,p)=>{
+      const revs=p.revisoes||[];
+      return a+(revs.length?Number(revs[revs.length-1].valor):Number(p.valor)||0);
+    },0);
+
+    // KPI: Pipeline
+    const pipeline = ativas.reduce((a,p)=>{
+      const revs=p.revisoes||[];
+      return a+(revs.length?Number(revs[revs.length-1].valor):Number(p.valor)||0);
+    },0);
+
+    // KPI: Saldo a medir
+    const srvAtivos = ganhas.filter(p=>(p.srvStatus||'nao_iniciado')==='iniciado');
+    const totalContrato = srvAtivos.reduce((a,p)=>a+(Number(p.srvValorContrato)||Number(p.valor)||0),0);
+    const totalMedido = srvAtivos.reduce((a,p)=>a+(p.srvMedicoes||[]).reduce((b,m)=>b+Number(m.valor||0),0),0);
+    const saldo = totalContrato - totalMedido;
+
+    // KPI: Taxa de conversão
+    const ganhasPer = ganhas.filter(p=>getMesFiltro(p,'dataGanho')).length;
+    const perdidasPer = perdidas.filter(p=>getMesFiltro(p,'dataPerdido')).length;
+    const totalDecididas = ganhasPer + perdidasPer;
+    const taxaConv = totalDecididas>0 ? Math.round(ganhasPer/totalDecididas*100) : 0;
+
+    const el=(id,v)=>{const e=document.getElementById(id);if(e)e.textContent=v;};
+    el('kpi-faturamento','R$ '+faturamento.toLocaleString('pt-BR'));
+    el('kpi-faturamento-sub', `${ganhasPeriodo.length} contrato${ganhasPeriodo.length!==1?'s':''} ${_dashPeriodo==='mensal'?'no mês':'no ano'}`);
+    el('kpi-pipeline','R$ '+pipeline.toLocaleString('pt-BR'));
+    el('kpi-pipeline-sub',`${ativas.length} proposta${ativas.length!==1?'s':''} ativa${ativas.length!==1?'s':''}`);
+    el('kpi-saldo-medir','R$ '+saldo.toLocaleString('pt-BR'));
+    el('kpi-saldo-sub',`${srvAtivos.length} serviço${srvAtivos.length!==1?'s':''} em andamento`);
+    el('kpi-conversao',taxaConv+'%');
+    el('kpi-conversao-sub',`${ganhasPer} ganhas / ${perdidasPer} perdidas ${_dashPeriodo==='mensal'?'no mês':'no ano'}`);
+
+    // Também atualiza métricas do header
+    el('m-total', ativas.length);
+    el('m-ganho', 'R$ '+faturamento.toLocaleString('pt-BR'));
+    el('m-pipeline', 'R$ '+pipeline.toLocaleString('pt-BR'));
+
+    // FUNIL VISUAL
+    const KANBAN_DASH=[2,4,5,0];
+    const CORES_DASH=['#6366F1','#10B981','#D4537E','#e74c3c'];
+    const porEtapa = KANBAN_DASH.map((i,ci)=>{
+      const cards = ativas.filter(p=>Number(p.etapa)===i);
+      const valor = cards.reduce((a,p)=>{const revs=p.revisoes||[];return a+(revs.length?Number(revs[revs.length-1].valor):Number(p.valor)||0);},0);
+      return{label:STAGE_SHORT[i],count:cards.length,valor,cor:CORES_DASH[ci]};
+    });
+    const maxVal = Math.max(...porEtapa.map(s=>s.valor),1);
+    const dashFunil = document.getElementById('dash-funil-visual');
+    if(dashFunil) dashFunil.innerHTML = porEtapa.map(s=>{
+      const pct = Math.round(s.valor/maxVal*100);
+      return `<div style="margin-bottom:10px">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:3px">
+          <div style="display:flex;align-items:center;gap:6px">
+            <span style="width:8px;height:8px;border-radius:50%;background:${s.cor};display:inline-block;flex-shrink:0"></span>
+            <span style="font-size:12px;color:#333;font-weight:500">${s.label}</span>
+          </div>
+          <div style="text-align:right">
+            <span style="font-size:12px;font-weight:700;color:#1a1a1a">${s.count}</span>
+            <span style="font-size:10px;color:#888;margin-left:4px">R$ ${s.valor.toLocaleString('pt-BR')}</span>
+          </div>
+        </div>
+        <div style="background:#e8eef8;border-radius:4px;height:8px;overflow:hidden">
+          <div style="width:${pct}%;height:100%;background:${s.cor};border-radius:4px;opacity:.8;transition:width .4s"></div>
+        </div>
+      </div>`;
+    }).join('');
+
+    // GRÁFICO DE BARRAS
+    const chartBars = document.getElementById('dash-chart-bars');
+    const chartLabels = document.getElementById('dash-chart-labels');
+    const maxCount = Math.max(...porEtapa.map(s=>s.count),1);
+    if(chartBars) chartBars.innerHTML = porEtapa.map(s=>{
+      const h = Math.max(6,Math.round(s.count/maxCount*62));
+      return `<div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:2px">
+        ${s.count>0?`<span style="font-size:10px;font-weight:700;color:#1a1a1a">${s.count}</span>`:''}
+        <div style="width:100%;height:${h}px;background:${s.cor};border-radius:4px 4px 0 0;opacity:.75" title="${s.label}"></div>
+      </div>`;
+    }).join('');
+    if(chartLabels) chartLabels.innerHTML = porEtapa.map(s=>`<div style="flex:1;text-align:center;font-size:8px;color:#888;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${s.label.replace('🔥 ','')}</div>`).join('');
+
+    // SERVIÇOS EM EXECUÇÃO
+    const dashSrv = document.getElementById('dash-servicos-saude');
+    if(dashSrv){
+      if(!srvAtivos.length){
+        dashSrv.innerHTML='<div class="empty slim">Nenhum serviço em andamento.</div>';
+      } else {
+        dashSrv.innerHTML = srvAtivos.slice(0,6).map(p=>{
+          const contrato = Number(p.srvValorContrato)||Number(p.valor)||0;
+          const medido = (p.srvMedicoes||[]).reduce((a,m)=>a+Number(m.valor||0),0);
+          const saldoP = contrato-medido;
+          const pctMed = contrato>0?Math.min(100,Math.round(medido/contrato*100)):0;
+          const inicio = p.srvDataInicio?new Date(p.srvDataInicio+'T00:00:00'):null;
+          const dias = inicio?Math.floor((hoje-inicio)/(1000*60*60*24)):null;
+          const prazo = p.srvPrazoDias||0;
+          const pctPrazo = prazo>0&&dias!=null?Math.min(100,Math.round(dias/prazo*100)):0;
+          const corPrazo = pctPrazo>=100?'#E24B4A':pctPrazo>=80?'#F59E0B':'#1565C0';
+          return `<div style="background:#f8faff;border:1px solid #dce8f8;border-radius:8px;padding:10px 12px;margin-bottom:8px">
+            <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:6px">
+              <div>
+                <div style="font-size:12px;font-weight:700;color:#1a1a1a">${p.titulo}</div>
+                <div style="font-size:10px;color:#888">${p.cliente||''}</div>
+              </div>
+              ${dias!=null?`<span style="font-size:10px;font-weight:700;color:${corPrazo};background:${corPrazo}18;padding:2px 7px;border-radius:10px">${prazo>0?`${dias}/${prazo}d`:`${dias}d`}</span>`:''}
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-bottom:6px;text-align:center">
+              <div><div style="font-size:8px;color:#aaa;text-transform:uppercase">Contrato</div><div style="font-size:11px;font-weight:700">R$ ${(contrato/1000).toLocaleString('pt-BR',{maximumFractionDigits:0})}k</div></div>
+              <div><div style="font-size:8px;color:#aaa;text-transform:uppercase">Medido</div><div style="font-size:11px;font-weight:700;color:var(--vs-green)">R$ ${(medido/1000).toLocaleString('pt-BR',{maximumFractionDigits:0})}k</div></div>
+              <div><div style="font-size:8px;color:#aaa;text-transform:uppercase">Saldo</div><div style="font-size:11px;font-weight:700;color:var(--vs-amber)">R$ ${(saldoP/1000).toLocaleString('pt-BR',{maximumFractionDigits:0})}k</div></div>
+            </div>
+            <div style="background:#e8eef8;border-radius:3px;height:5px;overflow:hidden">
+              <div style="width:${pctMed}%;height:100%;background:var(--vs-blue);border-radius:3px"></div>
+            </div>
+            ${prazo>0?`<div style="background:#e8eef8;border-radius:3px;height:4px;overflow:hidden;margin-top:3px"><div style="width:${pctPrazo}%;height:100%;background:${corPrazo};border-radius:3px"></div></div>`:''}
+          </div>`;
+        }).join('');
+      }
+    }
+
+    // ALERTAS DE HOJE
+    const alertasHoje = alertas.filter(a=>!a.feito&&(a.data||'').split('T')[0]===hojeStr);
+    const dashAlertas = document.getElementById('dash-alertas-hoje');
+    if(dashAlertas) dashAlertas.innerHTML = alertasHoje.length
+      ?alertasHoje.map(a=>`<div class="dash-alert-item">
+          <span class="dash-alert-icon ${a.tipo==='danger'?'danger':a.tipo==='warn'?'warn':''}">${a.tipo==='danger'?'🚨':a.tipo==='warn'?'⚠':'ℹ'}</span>
+          <div style="flex:1;min-width:0">
+            <div style="font-size:12px;font-weight:600;color:#1a1a1a">${a.titulo}</div>
+            ${a.responsavelNome?`<div style="font-size:10px;color:var(--vs-blue)">👤 ${a.responsavelNome}</div>`:''}
+          </div>
+          <button class="alert-done-btn" style="font-size:10px;padding:2px 7px;flex-shrink:0" onclick="abrirConcluirAlerta('${a.id}')">✓</button>
+        </div>`).join('')
+      :'<div class="empty slim">✅ Sem alertas para hoje</div>';
+
+    // FOLLOW-UPS DE HOJE
+    const fups = propostas.flatMap(p=>(p.followups||[]).filter(f=>f.dataAgenda===hojeStr&&!f.feito).map(f=>({...f,proposta:p})));
+    const dashFups = document.getElementById('dash-followups-hoje');
+    if(dashFups) dashFups.innerHTML = fups.length
+      ?fups.map(f=>`<div class="dash-action-item">
+          <div><strong>${f.proposta?.titulo||'—'}</strong><span>${f.proposta?.cliente||''}</span></div>
+          <em style="color:var(--vs-amber);font-size:10px">📅 ${f.desc||''}</em>
+        </div>`).join('')
+      :'<div class="empty slim">Sem follow-ups hoje</div>';
+  }
 
     // Hero
     const elH=(id,v)=>{const e=document.getElementById(id);if(e)e.textContent=v;};
@@ -1385,6 +1566,8 @@
     document.querySelectorAll('#main-app .tab').forEach(t=>t.classList.remove('active'));
     document.getElementById('panel-'+name)?.classList.add('active');
     if(el)el.classList.add('active');
+    const mg=document.getElementById('metrics-global');
+    if(mg)mg.style.display=name==='funil'?'grid':'none';
   };
 
   // ---- EXPORT ----
@@ -1676,6 +1859,20 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;backgrou
 .dash-alert-icon.danger{background:#FCEBEB}
 .dash-alert-icon.warn{background:#FFFBEB}
 
+/* KPIs EXECUTIVOS */
+.dash-kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:14px}
+@media(max-width:900px){.dash-kpis{grid-template-columns:repeat(2,1fr)}}
+.dash-kpi{background:#fff;border-radius:12px;padding:14px 16px;display:flex;align-items:center;gap:12px;border:1px solid #e8e7e0;border-left:4px solid #ccc;box-shadow:0 1px 4px rgba(0,0,0,.06)}
+.dash-kpi-green{border-left-color:var(--vs-green)}
+.dash-kpi-blue{border-left-color:var(--vs-blue)}
+.dash-kpi-amber{border-left-color:var(--vs-amber)}
+.dash-kpi-purple{border-left-color:#7C3AED}
+.dash-kpi-icon{font-size:22px;flex-shrink:0}
+.dash-kpi-body{flex:1;min-width:0}
+.dash-kpi-label{font-size:10px;color:#888;text-transform:uppercase;letter-spacing:.05em;margin-bottom:3px}
+.dash-kpi-val{font-size:20px;font-weight:800;color:#1a1a1a;line-height:1.1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.dash-kpi-sub{font-size:10px;color:#aaa;margin-top:2px}
+
 /* DASHBOARD OLD */
 ..dash-hero{background:linear-gradient(135deg,#040E2E 0%,#071A4A 60%,#0D2B6E 100%);border-radius:12px;padding:1.5rem 2rem;color:#fff;display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:12px}
 .dash-hero h2{font-size:20px;font-weight:800;margin:4px 0}
@@ -1817,7 +2014,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;backgrou
     <button class="tab" id="tab-usuarios" onclick="showPanel('usuarios',this)" style="display:none">⚙️ Usuários</button>
   </div>
 
-  <div class="metrics">
+  <div class="metrics" id="metrics-global" style="display:none">
     <div class="metric"><div class="mlabel">Propostas ativas</div><div class="mval blue" id="m-total">0</div></div>
     <div class="metric"><div class="mlabel">Ganho no mês</div><div class="mval green" id="m-ganho">R$ 0</div></div>
     <div class="metric"><div class="mlabel">Pipeline total</div><div class="mval amber" id="m-pipeline">R$ 0</div></div>
@@ -1825,77 +2022,89 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;backgrou
 
   <!-- DASHBOARD -->
   <div id="panel-dashboard" class="panel active">
-    <!-- HERO -->
-    <div class="dash-hero">
+
+    <!-- HERO EXECUTIVO -->
+    <div class="dash-hero" style="margin-bottom:16px">
       <div>
         <div class="dash-kicker">Construtora Vieira &amp; Silva</div>
-        <h2>Gestão Comercial</h2>
-        <p>Visão geral em tempo real — propostas, serviços e agenda</p>
+        <h2 style="font-size:22px">Painel Executivo</h2>
+        <p style="opacity:.7;font-size:12px">Atualizado em tempo real</p>
       </div>
-      <div style="display:flex;gap:20px;flex-wrap:wrap;justify-content:flex-end">
-        <div style="text-align:center"><div style="font-size:11px;opacity:.65">Propostas ativas</div><div style="font-size:28px;font-weight:800" id="m-total-hero">—</div></div>
-        <div style="text-align:center"><div style="font-size:11px;opacity:.65">Ganho no mês</div><div style="font-size:22px;font-weight:800;color:#7FDDBB" id="m-ganho-hero">—</div></div>
+      <div style="display:flex;flex-direction:column;align-items:flex-end;gap:10px">
+        <div class="srv-toggle-wrap" style="background:rgba(255,255,255,.15)">
+          <button class="srv-toggle-btn active" id="dash-btn-mensal" onclick="switchDashPeriodo('mensal')" style="color:#fff">📅 Mensal</button>
+          <button class="srv-toggle-btn" id="dash-btn-anual" onclick="switchDashPeriodo('anual')" style="color:rgba(255,255,255,.6)">📆 Anual</button>
+        </div>
+        <div style="font-size:12px;opacity:.7" id="dash-periodo-label"></div>
       </div>
     </div>
 
-    <!-- MÉTRICAS PROPOSTAS -->
-    <div style="margin-bottom:10px;font-size:11px;font-weight:700;color:#888;text-transform:uppercase;letter-spacing:.06em">📋 Propostas</div>
-    <div class="metrics" style="margin-bottom:1.25rem">
-      <div class="metric"><div class="mlabel">Propostas ativas</div><div class="mval blue" id="m-total">0</div></div>
-      <div class="metric"><div class="mlabel">Ganho no mês</div><div class="mval green" id="m-ganho">R$ 0</div></div>
-      <div class="metric"><div class="mlabel">Pipeline total</div><div class="mval amber" id="m-pipeline">R$ 0</div></div>
-    </div>
-
-    <!-- MÉTRICAS SERVIÇOS -->
-    <div style="margin-bottom:10px;font-size:11px;font-weight:700;color:#888;text-transform:uppercase;letter-spacing:.06em">🔧 Serviços</div>
-    <div class="metrics" style="margin-bottom:1.25rem">
-      <div class="metric"><div class="mlabel">Total serviços</div><div class="mval blue" id="dash-srv-total">0</div></div>
-      <div class="metric"><div class="mlabel">Em andamento</div><div class="mval amber" id="dash-srv-andamento">0</div></div>
-      <div class="metric"><div class="mlabel">Valor contratado</div><div class="mval blue" id="dash-srv-valor">R$ 0</div></div>
-      <div class="metric"><div class="mlabel">Total medido</div><div class="mval green" id="dash-srv-medido">R$ 0</div></div>
-      <div class="metric"><div class="mlabel">Saldo a medir</div><div class="mval amber" id="dash-srv-saldo">R$ 0</div></div>
-    </div>
-
-    <!-- LINHA PRINCIPAL: PIPELINE + ALERTAS + PROPOSTAS RECENTES -->
-    <div class="dash-layout3">
-      <!-- PIPELINE -->
-      <div class="dash-card">
-        <div class="dash-card-title">📊 Pipeline por etapa</div>
-        <div id="dash-pipeline-stages"></div>
-        <!-- GRÁFICO DE BARRAS -->
-        <div style="margin-top:14px;border-top:1px solid #f0efea;padding-top:12px">
-          <div class="dash-card-title" style="margin-bottom:8px">Distribuição visual</div>
-          <div id="dash-chart-bars" style="display:flex;align-items:flex-end;gap:6px;height:80px;padding:0 4px"></div>
-          <div id="dash-chart-labels" style="display:flex;gap:6px;margin-top:4px"></div>
+    <!-- KPIs PRINCIPAIS -->
+    <div class="dash-kpis">
+      <div class="dash-kpi dash-kpi-green">
+        <div class="dash-kpi-icon">💰</div>
+        <div class="dash-kpi-body">
+          <div class="dash-kpi-label">Faturamento contratado</div>
+          <div class="dash-kpi-val" id="kpi-faturamento">R$ 0</div>
+          <div class="dash-kpi-sub" id="kpi-faturamento-sub">no período</div>
         </div>
       </div>
+      <div class="dash-kpi dash-kpi-blue">
+        <div class="dash-kpi-icon">📋</div>
+        <div class="dash-kpi-body">
+          <div class="dash-kpi-label">Pipeline em aberto</div>
+          <div class="dash-kpi-val" id="kpi-pipeline">R$ 0</div>
+          <div class="dash-kpi-sub" id="kpi-pipeline-sub">propostas ativas</div>
+        </div>
+      </div>
+      <div class="dash-kpi dash-kpi-amber">
+        <div class="dash-kpi-icon">🔧</div>
+        <div class="dash-kpi-body">
+          <div class="dash-kpi-label">Saldo a medir</div>
+          <div class="dash-kpi-val" id="kpi-saldo-medir">R$ 0</div>
+          <div class="dash-kpi-sub" id="kpi-saldo-sub">de serviços ativos</div>
+        </div>
+      </div>
+      <div class="dash-kpi dash-kpi-purple">
+        <div class="dash-kpi-icon">🎯</div>
+        <div class="dash-kpi-body">
+          <div class="dash-kpi-label">Taxa de conversão</div>
+          <div class="dash-kpi-val" id="kpi-conversao">0%</div>
+          <div class="dash-kpi-sub" id="kpi-conversao-sub">propostas ganhas</div>
+        </div>
+      </div>
+    </div>
 
-      <!-- ALERTAS DO DIA -->
+    <!-- LINHA 2 -->
+    <div class="dash-layout3" style="margin-top:14px">
+      <!-- FUNIL COMERCIAL -->
       <div class="dash-card">
-        <div class="dash-card-title">🔔 Alertas de hoje</div>
+        <div class="dash-card-title" style="font-size:13px;font-weight:800;color:#1a1a1a;margin-bottom:12px">📊 Funil comercial</div>
+        <div id="dash-funil-visual"></div>
+        <div style="margin-top:14px;padding-top:12px;border-top:1px solid #f0efea">
+          <div id="dash-chart-bars" style="display:flex;align-items:flex-end;gap:5px;height:70px"></div>
+          <div id="dash-chart-labels" style="display:flex;gap:5px;margin-top:4px"></div>
+        </div>
+      </div>
+      <!-- SERVIÇOS -->
+      <div class="dash-card">
+        <div class="dash-card-title" style="font-size:13px;font-weight:800;color:#1a1a1a;margin-bottom:12px">🔧 Serviços em execução</div>
+        <div id="dash-servicos-saude"></div>
+      </div>
+      <!-- HOJE -->
+      <div class="dash-card">
+        <div class="dash-card-title" style="font-size:13px;font-weight:800;color:#1a1a1a;margin-bottom:8px">🔔 Hoje</div>
         <div id="dash-alertas-hoje"></div>
-        <div style="margin-top:14px;border-top:1px solid #f0efea;padding-top:10px">
-          <div class="dash-card-title" style="margin-bottom:8px">Follow-ups de hoje</div>
+        <div style="margin-top:12px;padding-top:10px;border-top:1px solid #f0efea">
+          <div style="font-size:11px;font-weight:700;color:#888;margin-bottom:6px">📅 FOLLOW-UPS DE HOJE</div>
           <div id="dash-followups-hoje"></div>
-        </div>
-      </div>
-
-      <!-- PROPOSTAS RECENTES -->
-      <div class="dash-card">
-        <div class="dash-card-title">📋 Propostas ativas</div>
-        <div id="dash-recentes"></div>
-        <div style="margin-top:14px;border-top:1px solid #f0efea;padding-top:10px">
-          <div class="dash-card-title" style="margin-bottom:8px">🔧 Serviços em andamento</div>
-          <div id="dash-servicos-andamento"></div>
         </div>
       </div>
     </div>
 
     <!-- AGENDA -->
-    <div class="agenda-wrap">
-      <div class="agenda-title-row">
-        <div class="agenda-title">📅 Agenda — próximos 14 dias</div>
-      </div>
+    <div class="agenda-wrap" style="margin-top:14px">
+      <div class="agenda-title-row"><div class="agenda-title">📅 Agenda — próximos 14 dias</div></div>
       <div class="agenda-scroll" id="agenda-container"></div>
     </div>
 
