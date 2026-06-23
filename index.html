@@ -29,8 +29,8 @@
   const auth = getAuth(app);
   const db = getFirestore(app);
 
-  const STAGES = ['Propostas Quentes','Levantamento técnico','Elaboração do escopo','Precificação','Acompanhamento','Negociação','Fechado / Ganho','Perdido'];
-  const STAGE_SHORT = ['🔥 Quentes','Levantamento','Elab. Escopo','Precificação','Acompanhamento','Negociação','Ganho','Perdido'];
+  const STAGES = ['Propostas Quentes','Levantamento técnico','Elab. Orçamento','Precificação','Enviados','Negociação','Fechado / Ganho','Perdido'];
+  const STAGE_SHORT = ['🔥 Quentes','Levantamento','Elab. Orçamento','Precificação','Enviados','Negociação','Ganho','Perdido'];
   const DOTS = ['#e74c3c','#F59E0B','#6366F1','#EF9F27','#10B981','#D4537E','#16a34a','#E24B4A'];
 
   const TIPOS_PRODUTO = ['Serviços de Construção Civil','Reforma e Acabamento','Fundação e Estrutura','Instalações Hidráulicas','Instalações Elétricas','Projetos'];
@@ -721,7 +721,7 @@
       filtroSel.innerHTML='<option value="">Todos os clientes</option>'+nomes.map(n=>`<option value="${n}">${n}</option>`).join('');
       if(filtroCliente) filtroSel.value=filtroCliente;
     }
-    const KANBAN_ORDER=[1,2,3,4,0,5,6,7];
+    const KANBAN_ORDER=[0,2,4,5,6,7];
     KANBAN_ORDER.forEach(si=>{
       const label=STAGE_SHORT[si];
       const filtroNome=document.getElementById('funil-filtro-nome')?.value.toLowerCase().trim()||'';
@@ -792,7 +792,8 @@
     if(!dashEl)return;
     const ativas=propostas.filter(p=>!p.arquivada&&Number(p.etapa)<6);
     const total=ativas.length||1;
-    const porEtapa=STAGES.slice(0,6).map((s,i)=>{
+    const KANBAN_DASH=[0,2,4,5];
+    const porEtapa=KANBAN_DASH.map((i)=>{
       const cards=ativas.filter(p=>Number(p.etapa)===i);
       const valor=cards.reduce((a,p)=>{const revs=p.revisoes||[];return a+(revs.length?Number(revs[revs.length-1].valor):Number(p.valor)||0);},0);
       return {label:STAGE_SHORT[i],count:cards.length,valor,pct:Math.round(cards.length/total*100)};
@@ -1264,7 +1265,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;backgrou
 
 /* KANBAN */
 .kanban-wrap{overflow-x:auto;padding-bottom:8px}
-.kanban{display:grid;grid-template-columns:repeat(8,minmax(130px,1fr));gap:8px;min-width:900px}
+.kanban{display:grid;grid-template-columns:repeat(6,minmax(180px,1fr));gap:10px;min-width:800px}
 .stage{background:#E8EEF8;border-radius:10px;padding:10px;min-height:100px}
 .stage.drag-over{background:#d0e4f7;outline:2px dashed var(--vs-blue)}
 .sth{font-size:10px;font-weight:600;color:#555;text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px;display:flex;align-items:center;justify-content:space-between;gap:4px}
@@ -1277,8 +1278,8 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;backgrou
 .card{background:#fff;border-radius:9px;padding:10px;margin-bottom:7px;border:1px solid #dce4f0;border-left:3px solid var(--vs-blue);cursor:grab;transition:box-shadow .15s,transform .1s}
 .card:hover{box-shadow:0 3px 12px rgba(21,101,192,.15);transform:translateY(-1px)}
 .card.card-prox-envio{border-left-color:var(--vs-amber);background:#fffbf0}
-.card-title{font-size:12px;font-weight:700;color:#1a1a1a;margin-bottom:3px;line-height:1.3}
-.card-client{font-size:11px;color:#555;margin-bottom:3px}
+.card-title{font-size:12px;font-weight:700;color:#1a1a1a;margin-bottom:3px;line-height:1.3;word-break:break-word}
+.card-client{font-size:11px;color:#555;margin-bottom:3px;word-break:break-word}
 .card-unidade{font-size:9px;color:#aaa;font-weight:400}
 .card-comprador{font-size:9px;color:#555;margin-bottom:3px}
 .card-valor-row{display:flex;align-items:center;justify-content:space-between;margin-bottom:5px}
@@ -1734,10 +1735,8 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;backgrou
       <div><label class="fl">Etapa</label>
         <select id="f-etapa">
           <option value="0">🔥 Propostas Quentes</option>
-          <option value="1">Levantamento técnico</option>
-          <option value="2">Elaboração do escopo</option>
-          <option value="3">Precificação</option>
-          <option value="4">Acompanhamento</option>
+          <option value="2">Elab. Orçamento</option>
+          <option value="4">Enviados</option>
           <option value="5">Negociação</option>
           <option value="6">Fechado / Ganho</option>
           <option value="7">Perdido</option>
