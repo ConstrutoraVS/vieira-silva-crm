@@ -797,29 +797,115 @@
   }
 
   function renderDashboard(){
-    const dashEl=document.getElementById('dash-pipeline-stages');
-    if(!dashEl)return;
-    const ativas=propostas.filter(p=>!p.arquivada&&Number(p.etapa)<6);
-    const total=ativas.length||1;
-    const KANBAN_DASH=[0,2,4,5];
-    const porEtapa=KANBAN_DASH.map((i)=>{
+    const hoje = new Date();
+    const hojeStr = hoje.toISOString().split('T')[0];
+    const ativas = propostas.filter(p=>!p.arquivada&&Number(p.etapa)<6);
+    const ganhas = propostas.filter(p=>Number(p.etapa)===6);
+
+    // Hero
+    const elH=(id,v)=>{const e=document.getElementById(id);if(e)e.textContent=v;};
+    elH('m-total-hero', ativas.length);
+    elH('m-ganho-hero', 'R$ '+(() => {
+      const now=new Date();const mes=`${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}`;
+      return propostas.filter(p=>{
+        if(Number(p.etapa)!==6)return false;
+        if(p.mesGanho)return p.mesGanho===mes;
+        const dataRef=p.dataGanho||(p.criadoEm?.toDate?p.criadoEm.toDate().toISOString():p.criadoEm)||'';
+        if(!dataRef)return true;
+        const d=new Date(dataRef);
+        return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`===mes;
+      }).reduce((a,p)=>{const revs=p.revisoes||[];return a+(revs.length?Number(revs[revs.length-1].valor):Number(p.valor)||0);},0).toLocaleString('pt-BR'));
+
+    })());
+
+    // Métricas serviços
+    const totalSrvValor = ganhas.reduce((a,p)=>a+(Number(p.srvValorContrato)||Number(p.valor)||0),0);
+    const totalSrvMedido = ganhas.reduce((a,p)=>a+(p.srvMedicoes||[]).reduce((b,m)=>b+Number(m.valor||0),0),0);
+    const srvAndamento = ganhas.filter(p=>(p.srvStatus||'nao_iniciado')==='iniciado').length;
+    elH('dash-srv-total', ganhas.length);
+    elH('dash-srv-andamento', srvAndamento);
+    elH('dash-srv-valor', 'R$ '+totalSrvValor.toLocaleString('pt-BR'));
+    elH('dash-srv-medido', 'R$ '+totalSrvMedido.toLocaleString('pt-BR'));
+    elH('dash-srv-saldo', 'R$ '+(totalSrvValor-totalSrvMedido).toLocaleString('pt-BR'));
+
+    // Pipeline por etapa
+    const KANBAN_DASH=[2,4,5,0,6];
+    const CORES_DASH=['#6366F1','#10B981','#D4537E','#e74c3c','#16a34a'];
+    const porEtapa=KANBAN_DASH.map((i,ci)=>{
       const cards=ativas.filter(p=>Number(p.etapa)===i);
       const valor=cards.reduce((a,p)=>{const revs=p.revisoes||[];return a+(revs.length?Number(revs[revs.length-1].valor):Number(p.valor)||0);},0);
-      return {label:STAGE_SHORT[i],count:cards.length,valor,pct:Math.round(cards.length/total*100)};
+      return{label:STAGE_SHORT[i],count:cards.length,valor,pct:Math.round(cards.length/(ativas.length||1)*100),cor:CORES_DASH[ci]};
     });
-    dashEl.innerHTML=porEtapa.map(s=>`<div class="dash-stage-line">
+    const dashEl=document.getElementById('dash-pipeline-stages');
+    if(dashEl) dashEl.innerHTML=porEtapa.map(s=>`<div class="dash-stage-line">
       <div class="dash-stage-top"><span>${s.label}</span><strong>${s.count} prop — R$ ${s.valor.toLocaleString('pt-BR')}</strong></div>
-      <div class="dash-stage-track"><div class="dash-stage-fill" style="width:${s.pct}%;background:var(--vs-blue)"></div></div>
+      <div class="dash-stage-track"><div class="dash-stage-fill" style="width:${s.pct}%;background:${s.cor}"></div></div>
     </div>`).join('');
 
-    // Últimas propostas
+    // Gráfico de barras
+    const chartBars=document.getElementById('dash-chart-bars');
+    const chartLabels=document.getElementById('dash-chart-labels');
+    const maxCount=Math.max(...porEtapa.map(s=>s.count),1);
+    if(chartBars) chartBars.innerHTML=porEtapa.map(s=>{
+      const h=Math.max(8,Math.round(s.count/maxCount*72));
+      return `<div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:3px">
+        ${s.count>0?`<span style="font-size:10px;font-weight:700;color:#1a1a1a">${s.count}</span>`:''}
+        <div style="width:100%;height:${h}px;background:${s.cor};border-radius:4px 4px 0 0;opacity:.85;transition:height .4s" title="${s.label}: ${s.count}"></div>
+      </div>`;
+    }).join('');
+    if(chartLabels) chartLabels.innerHTML=porEtapa.map(s=>`<div style="flex:1;text-align:center;font-size:8px;color:#888;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${s.label.replace('🔥 ','')}</div>`).join('');
+
+    // Alertas de hoje
+    const alertasHoje=alertas.filter(a=>!a.feito&&(a.data||'').split('T')[0]===hojeStr);
+    const dashAlertas=document.getElementById('dash-alertas-hoje');
+    if(dashAlertas) dashAlertas.innerHTML=alertasHoje.length
+      ?alertasHoje.map(a=>`<div class="dash-alert-item">
+          <span class="dash-alert-icon ${a.tipo==='danger'?'danger':a.tipo==='warn'?'warn':''}">
+            ${a.tipo==='danger'?'🚨':a.tipo==='warn'?'⚠':'ℹ'}
+          </span>
+          <div><div style="font-size:12px;font-weight:600">${a.titulo}</div>
+          ${a.responsavelNome?`<div style="font-size:10px;color:var(--vs-blue)">👤 ${a.responsavelNome}</div>`:''}
+          </div>
+          <button class="alert-done-btn" style="font-size:10px;padding:3px 8px" onclick="abrirConcluirAlerta('${a.id}')">✓</button>
+        </div>`).join('')
+      :'<div class="empty slim">✅ Nenhum alerta para hoje</div>';
+
+    // Follow-ups de hoje
+    const fups=propostas.flatMap(p=>(p.followups||[]).filter(f=>f.dataAgenda===hojeStr&&!f.feito).map(f=>({...f,proposta:p})));
+    const dashFups=document.getElementById('dash-followups-hoje');
+    if(dashFups) dashFups.innerHTML=fups.length
+      ?fups.map(f=>`<div class="dash-action-item">
+          <div><strong>${f.proposta?.titulo||'—'}</strong><span>${f.proposta?.cliente||''}</span></div>
+          <em style="color:var(--vs-amber)">📅 ${f.desc||''}</em>
+        </div>`).join('')
+      :'<div class="empty slim">Nenhum follow-up hoje</div>';
+
+    // Propostas ativas recentes
     const recentes=document.getElementById('dash-recentes');
     if(recentes){
-      const lista=propostas.filter(p=>!p.arquivada&&Number(p.etapa)<6).slice(0,8);
+      const lista=ativas.slice(0,6);
       recentes.innerHTML=lista.map(p=>`<div class="dash-action-item">
         <div><strong>${p.titulo}</strong><span>${p.cliente||'—'}</span></div>
         <em>${STAGE_SHORT[p.etapa]||'—'}</em>
       </div>`).join('')||'<div class="empty slim">Sem propostas ativas.</div>';
+    }
+
+    // Serviços em andamento
+    const dashSrv=document.getElementById('dash-servicos-andamento');
+    if(dashSrv){
+      const srvAtivos=ganhas.filter(p=>(p.srvStatus||'nao_iniciado')==='iniciado').slice(0,5);
+      dashSrv.innerHTML=srvAtivos.map(p=>{
+        const contrato=Number(p.srvValorContrato)||Number(p.valor)||0;
+        const medido=(p.srvMedicoes||[]).reduce((a,m)=>a+Number(m.valor||0),0);
+        const pct=contrato>0?Math.min(100,Math.round(medido/contrato*100)):0;
+        const inicio=p.srvDataInicio?new Date(p.srvDataInicio+'T00:00:00'):null;
+        const dias=inicio?Math.floor((hoje-inicio)/(1000*60*60*24)):null;
+        return `<div class="dash-action-item" style="flex-direction:column;align-items:stretch;gap:4px">
+          <div style="display:flex;justify-content:space-between"><strong style="font-size:12px">${p.titulo}</strong><span style="font-size:10px;color:#888">${dias!=null?dias+'d':''}</span></div>
+          <div style="display:flex;justify-content:space-between;font-size:10px;color:#888"><span>${p.cliente||''}</span><span>${pct}% medido</span></div>
+          <div style="background:#e8eef8;border-radius:3px;height:5px;overflow:hidden"><div style="width:${pct}%;height:100%;background:var(--vs-blue);border-radius:3px"></div></div>
+        </div>`;
+      }).join('')||'<div class="empty slim">Nenhum serviço em andamento.</div>';
     }
   }
 
@@ -1582,7 +1668,15 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;backgrou
 .agenda-item-desc{font-size:10px;color:#555;margin-top:2px;line-height:1.3}
 .agenda-empty-day{font-size:10px;color:#bbb;text-align:center;padding:6px 0}
 
-/* DASHBOARD */
+.dash-layout3{display:grid;grid-template-columns:1.2fr 1fr 1fr;gap:12px;margin-bottom:14px}
+@media(max-width:900px){.dash-layout3{grid-template-columns:1fr}}
+.dash-alert-item{display:flex;align-items:center;gap:8px;padding:7px 0;border-bottom:1px solid #f5f5f0}
+.dash-alert-item:last-child{border-bottom:none}
+.dash-alert-icon{font-size:14px;flex-shrink:0;width:28px;height:28px;border-radius:6px;display:flex;align-items:center;justify-content:center;background:#EEF4FF}
+.dash-alert-icon.danger{background:#FCEBEB}
+.dash-alert-icon.warn{background:#FFFBEB}
+
+/* DASHBOARD OLD */
 ..dash-hero{background:linear-gradient(135deg,#040E2E 0%,#071A4A 60%,#0D2B6E 100%);border-radius:12px;padding:1.5rem 2rem;color:#fff;display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:12px}
 .dash-hero h2{font-size:20px;font-weight:800;margin:4px 0}
 .dash-hero p{font-size:13px;opacity:.75;margin-top:4px}
@@ -1731,24 +1825,72 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;backgrou
 
   <!-- DASHBOARD -->
   <div id="panel-dashboard" class="panel active">
+    <!-- HERO -->
     <div class="dash-hero">
       <div>
         <div class="dash-kicker">Construtora Vieira &amp; Silva</div>
         <h2>Gestão Comercial</h2>
-        <p>Acompanhe suas propostas e oportunidades em tempo real.</p>
+        <p>Visão geral em tempo real — propostas, serviços e agenda</p>
       </div>
-      <div style="text-align:right"><div style="font-size:11px;opacity:.7">Propostas no funil</div><div style="font-size:28px;font-weight:800" id="m-total-hero">—</div></div>
+      <div style="display:flex;gap:20px;flex-wrap:wrap;justify-content:flex-end">
+        <div style="text-align:center"><div style="font-size:11px;opacity:.65">Propostas ativas</div><div style="font-size:28px;font-weight:800" id="m-total-hero">—</div></div>
+        <div style="text-align:center"><div style="font-size:11px;opacity:.65">Ganho no mês</div><div style="font-size:22px;font-weight:800;color:#7FDDBB" id="m-ganho-hero">—</div></div>
+      </div>
     </div>
-    <div class="dash-layout">
+
+    <!-- MÉTRICAS PROPOSTAS -->
+    <div style="margin-bottom:10px;font-size:11px;font-weight:700;color:#888;text-transform:uppercase;letter-spacing:.06em">📋 Propostas</div>
+    <div class="metrics" style="margin-bottom:1.25rem">
+      <div class="metric"><div class="mlabel">Propostas ativas</div><div class="mval blue" id="m-total">0</div></div>
+      <div class="metric"><div class="mlabel">Ganho no mês</div><div class="mval green" id="m-ganho">R$ 0</div></div>
+      <div class="metric"><div class="mlabel">Pipeline total</div><div class="mval amber" id="m-pipeline">R$ 0</div></div>
+    </div>
+
+    <!-- MÉTRICAS SERVIÇOS -->
+    <div style="margin-bottom:10px;font-size:11px;font-weight:700;color:#888;text-transform:uppercase;letter-spacing:.06em">🔧 Serviços</div>
+    <div class="metrics" style="margin-bottom:1.25rem">
+      <div class="metric"><div class="mlabel">Total serviços</div><div class="mval blue" id="dash-srv-total">0</div></div>
+      <div class="metric"><div class="mlabel">Em andamento</div><div class="mval amber" id="dash-srv-andamento">0</div></div>
+      <div class="metric"><div class="mlabel">Valor contratado</div><div class="mval blue" id="dash-srv-valor">R$ 0</div></div>
+      <div class="metric"><div class="mlabel">Total medido</div><div class="mval green" id="dash-srv-medido">R$ 0</div></div>
+      <div class="metric"><div class="mlabel">Saldo a medir</div><div class="mval amber" id="dash-srv-saldo">R$ 0</div></div>
+    </div>
+
+    <!-- LINHA PRINCIPAL: PIPELINE + ALERTAS + PROPOSTAS RECENTES -->
+    <div class="dash-layout3">
+      <!-- PIPELINE -->
       <div class="dash-card">
-        <div class="dash-card-title">Pipeline por etapa</div>
+        <div class="dash-card-title">📊 Pipeline por etapa</div>
         <div id="dash-pipeline-stages"></div>
+        <!-- GRÁFICO DE BARRAS -->
+        <div style="margin-top:14px;border-top:1px solid #f0efea;padding-top:12px">
+          <div class="dash-card-title" style="margin-bottom:8px">Distribuição visual</div>
+          <div id="dash-chart-bars" style="display:flex;align-items:flex-end;gap:6px;height:80px;padding:0 4px"></div>
+          <div id="dash-chart-labels" style="display:flex;gap:6px;margin-top:4px"></div>
+        </div>
       </div>
+
+      <!-- ALERTAS DO DIA -->
       <div class="dash-card">
-        <div class="dash-card-title">Propostas recentes</div>
+        <div class="dash-card-title">🔔 Alertas de hoje</div>
+        <div id="dash-alertas-hoje"></div>
+        <div style="margin-top:14px;border-top:1px solid #f0efea;padding-top:10px">
+          <div class="dash-card-title" style="margin-bottom:8px">Follow-ups de hoje</div>
+          <div id="dash-followups-hoje"></div>
+        </div>
+      </div>
+
+      <!-- PROPOSTAS RECENTES -->
+      <div class="dash-card">
+        <div class="dash-card-title">📋 Propostas ativas</div>
         <div id="dash-recentes"></div>
+        <div style="margin-top:14px;border-top:1px solid #f0efea;padding-top:10px">
+          <div class="dash-card-title" style="margin-bottom:8px">🔧 Serviços em andamento</div>
+          <div id="dash-servicos-andamento"></div>
+        </div>
       </div>
     </div>
+
     <!-- AGENDA -->
     <div class="agenda-wrap">
       <div class="agenda-title-row">
@@ -1756,6 +1898,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;backgrou
       </div>
       <div class="agenda-scroll" id="agenda-container"></div>
     </div>
+
     <!-- PROPOSTAS GANHAS E PERDIDAS -->
     <div class="agenda-wrap prop-gp-wrap">
       <div class="agenda-title-row">
