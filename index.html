@@ -961,6 +961,196 @@
     el.innerHTML=`<div class="revisoes-list">${revs.map((r,i)=>`<div class="revisao-chip"><span class="rev-chip">${r.rev}</span><span class="rev-valor">R$ ${Number(r.valor).toLocaleString('pt-BR')}</span>${r.motivo?`<span class="rev-motivo">${r.motivo}</span>`:''}<button type="button" class="rev-del" onclick="removerRevisao(${i})">✕</button></div>`).join('')}</div>`;
   }
 
+  // ---- SERVIÇOS ----
+  let _srvEditId = null;
+  let _srvMedicoes = [];
+
+  window.renderServicos = function() {
+    const board = document.getElementById('servicos-board');
+    if (!board) return;
+
+    const filtroStatus = document.getElementById('srv-filtro-status')?.value || '';
+    const filtroCliente = document.getElementById('srv-filtro-cliente')?.value || '';
+
+    // Populate cliente filter
+    const filtroSel = document.getElementById('srv-filtro-cliente');
+    if (filtroSel) {
+      const cur = filtroSel.value;
+      const nomes = [...new Set(propostas.filter(p => Number(p.etapa) === 6).map(p => p.cliente))].sort();
+      filtroSel.innerHTML = '<option value="">Todos os clientes</option>' + nomes.map(n => `<option value="${n}" ${n === cur ? 'selected' : ''}>${n}</option>`).join('');
+    }
+
+    // Get ganhas proposals
+    let ganhas = propostas.filter(p => Number(p.etapa) === 6);
+    if (filtroCliente) ganhas = ganhas.filter(p => p.cliente === filtroCliente);
+    if (filtroStatus) ganhas = ganhas.filter(p => (p.srvStatus || 'nao_iniciado') === filtroStatus);
+
+    // Update metrics
+    const hoje = new Date();
+    const totalValor = ganhas.reduce((a, p) => a + (Number(p.srvValorContrato) || Number(p.valor) || 0), 0);
+    const totalMedido = ganhas.reduce((a, p) => a + (p.srvMedicoes || []).reduce((b, m) => b + Number(m.valor || 0), 0), 0);
+    const andamento = ganhas.filter(p => (p.srvStatus || 'nao_iniciado') === 'iniciado').length;
+
+    const el = (id, v) => { const e = document.getElementById(id); if (e) e.textContent = v; };
+    el('srv-m-total', ganhas.length);
+    el('srv-m-andamento', andamento);
+    el('srv-m-valor', 'R$ ' + totalValor.toLocaleString('pt-BR'));
+    el('srv-m-medido', 'R$ ' + totalMedido.toLocaleString('pt-BR'));
+    el('srv-m-saldo', 'R$ ' + (totalValor - totalMedido).toLocaleString('pt-BR'));
+
+    const STATUS_CONFIG = {
+      nao_iniciado: { label: '⚪ Não iniciado', dot: '#aaa', bg: '#f5f5f5' },
+      iniciado:     { label: '🟡 Em andamento', dot: '#F59E0B', bg: '#FFFBEB' },
+      concluido:    { label: '🟢 Concluído',    dot: '#16a34a', bg: '#f0fdf4' }
+    };
+
+    const cols = ['nao_iniciado', 'iniciado', 'concluido'];
+    board.innerHTML = cols.map(status => {
+      const cfg = STATUS_CONFIG[status];
+      const cards = ganhas.filter(p => (p.srvStatus || 'nao_iniciado') === status);
+      const cardsHtml = cards.map(p => {
+        const valorContrato = Number(p.srvValorContrato) || Number(p.valor) || 0;
+        const medicoes = p.srvMedicoes || [];
+        const totalMed = medicoes.reduce((a, m) => a + Number(m.valor || 0), 0);
+        const saldo = valorContrato - totalMed;
+        const pct = valorContrato > 0 ? Math.min(100, Math.round(totalMed / valorContrato * 100)) : 0;
+
+        // Contador de dias
+        let diasHtml = '';
+        if (p.srvDataInicio && status === 'iniciado') {
+          const inicio = new Date(p.srvDataInicio + 'T00:00:00');
+          const dias = Math.floor((hoje - inicio) / (1000 * 60 * 60 * 24));
+          diasHtml = `<div class="srv-dias-badge">⏱ ${dias} dia${dias !== 1 ? 's' : ''} em andamento</div>`;
+        }
+        if (p.srvDataInicio && status === 'concluido') {
+          const inicio = new Date(p.srvDataInicio + 'T00:00:00');
+          const dias = Math.floor((hoje - inicio) / (1000 * 60 * 60 * 24));
+          diasHtml = `<div class="srv-dias-badge" style="background:#e8f5e9;color:#2e7d32">✅ Durou ${dias} dia${dias !== 1 ? 's' : ''}</div>`;
+        }
+
+        // Últimas medições
+        const ultMed = [...medicoes].reverse().slice(0, 2).map(m =>
+          `<div class="srv-med-item"><span class="srv-med-desc">${m.desc || 'Medição'}</span><span class="srv-med-val">R$ ${Number(m.valor).toLocaleString('pt-BR')}</span></div>`
+        ).join('');
+
+        return `<div class="card" style="border-left:3px solid ${cfg.dot};cursor:default">
+          <div class="card-title">${p.titulo}</div>
+          <div class="card-client">${p.cliente || '—'}</div>
+          ${diasHtml}
+          <div style="margin:8px 0 4px">
+            <div style="display:flex;justify-content:space-between;font-size:10px;color:#888;margin-bottom:3px">
+              <span>Medido: R$ ${totalMed.toLocaleString('pt-BR')}</span>
+              <span>${pct}%</span>
+            </div>
+            <div style="background:#e8eef8;border-radius:4px;height:7px;overflow:hidden">
+              <div style="width:${pct}%;height:100%;background:${pct >= 100 ? '#16a34a' : 'var(--vs-blue)'};border-radius:4px;transition:width .4s"></div>
+            </div>
+            <div style="font-size:10px;color:var(--vs-amber);font-weight:700;margin-top:3px">Saldo: R$ ${saldo.toLocaleString('pt-BR')}</div>
+          </div>
+          ${ultMed ? `<div class="srv-meds-preview">${ultMed}</div>` : ''}
+          <div style="display:flex;justify-content:flex-end;margin-top:8px">
+            <button class="card-btn" onclick="abrirEditServico('${p.id}')" title="Editar serviço">✎ Editar</button>
+          </div>
+        </div>`;
+      }).join('') || `<div class="empty slim">Nenhum serviço aqui.</div>`;
+
+      return `<div class="stage" style="background:${cfg.bg}">
+        <div class="sth">
+          <div class="stl"><span class="dot" style="background:${cfg.dot}"></span><span class="stn">${cfg.label}</span></div>
+          <span class="stc">${cards.length}</span>
+        </div>
+        ${cardsHtml}
+      </div>`;
+    }).join('');
+  };
+
+  window.abrirEditServico = (id) => {
+    _srvEditId = id;
+    const p = propostas.find(x => x.id === id);
+    if (!p) return;
+    _srvMedicoes = p.srvMedicoes ? [...p.srvMedicoes] : [];
+    document.getElementById('srv-proposta-id').value = id;
+    document.getElementById('modal-srv-title').textContent = 'Serviço — ' + p.titulo;
+    document.getElementById('srv-titulo-ref').textContent = p.titulo;
+    document.getElementById('srv-cliente-ref').textContent = p.cliente || '';
+    document.getElementById('srv-status').value = p.srvStatus || 'nao_iniciado';
+    document.getElementById('srv-data-inicio').value = p.srvDataInicio || '';
+    document.getElementById('srv-valor-contrato').value = p.srvValorContrato ? Number(p.srvValorContrato).toLocaleString('pt-BR', {minimumFractionDigits:2}) : '';
+    document.getElementById('srv-obs').value = p.srvObs || '';
+    renderMedicoesModal();
+    document.getElementById('modal-servico').classList.add('open');
+    applyValorMask(document.getElementById('srv-valor-contrato'));
+  };
+
+  function renderMedicoesModal() {
+    const lista = document.getElementById('srv-medicoes-lista');
+    if (!lista) return;
+    if (!_srvMedicoes.length) {
+      lista.innerHTML = '<div class="empty slim">Nenhuma medição registrada.</div>';
+    } else {
+      lista.innerHTML = _srvMedicoes.map((m, i) => `
+        <div class="srv-med-row">
+          <div class="srv-med-row-info">
+            <span class="srv-med-row-desc">${m.desc || 'Medição #' + (i+1)}</span>
+            <span class="srv-med-row-data">${m.data || ''}</span>
+          </div>
+          <span class="srv-med-row-val">R$ ${Number(m.valor).toLocaleString('pt-BR')}</span>
+          <button type="button" class="contato-del-btn" onclick="removerMedicao(${i})">✕</button>
+        </div>`).join('');
+    }
+    // Update totals
+    const p = propostas.find(x => x.id === _srvEditId);
+    const contrato = valorToFloat(document.getElementById('srv-valor-contrato')?.value) || Number(p?.srvValorContrato) || 0;
+    const totalMed = _srvMedicoes.reduce((a, m) => a + Number(m.valor || 0), 0);
+    const saldo = contrato - totalMed;
+    const elM = document.getElementById('srv-total-medido-modal');
+    const elS = document.getElementById('srv-saldo-modal');
+    if (elM) elM.textContent = 'R$ ' + totalMed.toLocaleString('pt-BR');
+    if (elS) elS.textContent = 'R$ ' + Math.max(0, saldo).toLocaleString('pt-BR');
+  }
+
+  window.removerMedicao = (idx) => {
+    _srvMedicoes.splice(idx, 1);
+    renderMedicoesModal();
+  };
+
+  window.abrirModalMedicao = () => {
+    document.getElementById('med-data').value = new Date().toISOString().split('T')[0];
+    document.getElementById('med-valor').value = '';
+    document.getElementById('med-desc').value = '';
+    applyValorMask(document.getElementById('med-valor'));
+    document.getElementById('modal-medicao').classList.add('open');
+  };
+
+  window.salvarMedicao = () => {
+    const valor = valorToFloat(document.getElementById('med-valor').value);
+    if (!valor) { showToast('Informe o valor da medição.'); return; }
+    _srvMedicoes.push({
+      id: String(Date.now()),
+      data: document.getElementById('med-data').value,
+      valor,
+      desc: document.getElementById('med-desc').value.trim()
+    });
+    closeModal('modal-medicao');
+    renderMedicoesModal();
+  };
+
+  window.salvarServico = async () => {
+    const id = document.getElementById('srv-proposta-id').value;
+    if (!id) return;
+    const dados = {
+      srvStatus: document.getElementById('srv-status').value,
+      srvDataInicio: document.getElementById('srv-data-inicio').value,
+      srvValorContrato: valorToFloat(document.getElementById('srv-valor-contrato').value),
+      srvObs: document.getElementById('srv-obs').value.trim(),
+      srvMedicoes: _srvMedicoes
+    };
+    await updateDoc(doc(db, 'propostas', id), dados);
+    closeModal('modal-servico');
+    showToast('Serviço atualizado!');
+    renderServicos();
+  };
+
   // ---- PAINEL ----
   window.showPanel=(name,el)=>{
     document.querySelectorAll('#main-app .panel').forEach(p=>p.classList.remove('active'));
@@ -1310,6 +1500,18 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;backgrou
 .usuario-role-badge{font-size:11px;padding:3px 10px;border-radius:20px;font-weight:700;flex-shrink:0}
 .u-err{font-size:12px;color:#A32D2D;min-height:16px;margin-top:4px;text-align:center}
 
+/* SERVIÇOS */
+.srv-dias-badge{font-size:10px;font-weight:700;color:var(--vs-amber);background:#FFFBEB;border:1px solid #FDE68A;border-radius:20px;padding:2px 8px;display:inline-block;margin:4px 0}
+.srv-meds-preview{border-top:1px solid #f0efea;margin-top:6px;padding-top:6px;display:flex;flex-direction:column;gap:3px}
+.srv-med-item{display:flex;justify-content:space-between;font-size:10px;color:#555}
+.srv-med-desc{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:120px}
+.srv-med-val{font-weight:700;color:var(--vs-green);flex-shrink:0}
+.srv-med-row{display:flex;align-items:center;gap:8px;background:#fafaf8;border:1px solid #e8e7e0;border-radius:7px;padding:8px 10px;margin-bottom:6px}
+.srv-med-row-info{flex:1;min-width:0}
+.srv-med-row-desc{display:block;font-size:12px;font-weight:600;color:#1a1a1a}
+.srv-med-row-data{font-size:10px;color:#aaa}
+.srv-med-row-val{font-size:13px;font-weight:700;color:var(--vs-green);flex-shrink:0}
+
 /* EMPTY */
 .empty{text-align:center;padding:2rem;color:#aaa;font-size:13px}
 .empty.slim{padding:.75rem;font-size:12px}
@@ -1349,6 +1551,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;backgrou
     <button class="tab" onclick="showPanel('funil',this)">📋 Funil</button>
     <button class="tab" onclick="showPanel('alertas',this)">🔔 Alertas</button>
     <button class="tab" onclick="showPanel('clientes',this)">🏢 Clientes</button>
+    <button class="tab" onclick="showPanel('servicos',this);renderServicos()">🔧 Serviços</button>
     <button class="tab" onclick="showPanel('compradores',this)">👤 Compradores</button>
     <button class="tab" id="tab-usuarios" onclick="showPanel('usuarios',this)" style="display:none">⚙️ Usuários</button>
   </div>
@@ -1457,6 +1660,36 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;backgrou
       <button class="btn-new" onclick="openNovoCliente()">+ Novo cliente</button>
     </div>
     <div id="clientes-list"></div>
+  </div>
+
+  <!-- SERVIÇOS EM ANDAMENTO -->
+  <div id="panel-servicos" class="panel">
+    <div class="sec-header">
+      <div class="sec-title">Serviços em andamento</div>
+      <div class="action-group">
+        <select id="srv-filtro-status" onchange="renderServicos()" style="font-size:12px;padding:6px 12px;border-radius:20px;border:1px solid #ddd;background:#fff;font-family:inherit">
+          <option value="">Todos os status</option>
+          <option value="nao_iniciado">⚪ Não iniciado</option>
+          <option value="iniciado">🟡 Iniciado</option>
+          <option value="concluido">🟢 Concluído</option>
+        </select>
+        <select id="srv-filtro-cliente" onchange="renderServicos()" style="font-size:12px;padding:6px 12px;border-radius:20px;border:1px solid #ddd;background:#fff;font-family:inherit">
+          <option value="">Todos os clientes</option>
+        </select>
+      </div>
+    </div>
+    <!-- MÉTRICAS SERVIÇOS -->
+    <div class="metrics" style="margin-bottom:1rem">
+      <div class="metric"><div class="mlabel">Total de serviços</div><div class="mval blue" id="srv-m-total">0</div></div>
+      <div class="metric"><div class="mlabel">Em andamento</div><div class="mval amber" id="srv-m-andamento">0</div></div>
+      <div class="metric"><div class="mlabel">Valor total contratado</div><div class="mval blue" id="srv-m-valor">R$ 0</div></div>
+      <div class="metric"><div class="mlabel">Total medido</div><div class="mval green" id="srv-m-medido">R$ 0</div></div>
+      <div class="metric"><div class="mlabel">Saldo a medir</div><div class="mval amber" id="srv-m-saldo">R$ 0</div></div>
+    </div>
+    <!-- KANBAN SERVIÇOS -->
+    <div class="kanban-wrap">
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;min-width:600px" id="servicos-board"></div>
+    </div>
   </div>
 
   <!-- COMPRADORES -->
@@ -1674,7 +1907,56 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;backgrou
   </div>
 </div>
 
-<!-- CONFIRMS -->
+<!-- MODAL SERVIÇO -->
+<div class="modal-bg" id="modal-servico">
+  <div class="modal modal-lg">
+    <div class="mh"><div class="mt" id="modal-srv-title">Editar serviço</div><button class="mc" onclick="closeModal('modal-servico')">×</button></div>
+    <div class="fg">
+      <input type="hidden" id="srv-proposta-id">
+      <div style="background:#f0f4f8;border-radius:8px;padding:10px 14px;margin-bottom:4px">
+        <div style="font-size:11px;color:#888;margin-bottom:2px">Proposta</div>
+        <div style="font-size:14px;font-weight:700;color:#1a1a1a" id="srv-titulo-ref"></div>
+        <div style="font-size:12px;color:#555;margin-top:2px" id="srv-cliente-ref"></div>
+      </div>
+      <div class="fgf"><label class="fl">Status</label>
+        <select id="srv-status">
+          <option value="nao_iniciado">⚪ Não iniciado</option>
+          <option value="iniciado">🟡 Iniciado</option>
+          <option value="concluido">🟢 Concluído</option>
+        </select>
+      </div>
+      <div><label class="fl">Data de início do serviço</label><input id="srv-data-inicio" type="date"></div>
+      <div><label class="fl">Valor total contratado (R$)</label><input id="srv-valor-contrato" type="text" placeholder="0,00" inputmode="numeric"></div>
+      <div class="fgf"><label class="fl">Observações</label><textarea id="srv-obs" placeholder="Anotações sobre o serviço..."></textarea></div>
+      <!-- MEDIÇÕES -->
+      <div style="border-top:2px solid var(--vs-blue-pale);padding-top:14px;margin-top:4px">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+          <div style="font-size:13px;font-weight:700;color:#1a1a1a">💰 Medições</div>
+          <button type="button" class="btn-new" style="padding:5px 12px;font-size:11px" onclick="abrirModalMedicao()">+ Nova medição</button>
+        </div>
+        <div id="srv-medicoes-lista"></div>
+        <div style="margin-top:10px;background:#f0f8f0;border-radius:8px;padding:10px 14px;display:flex;gap:20px;flex-wrap:wrap">
+          <div><div style="font-size:10px;color:#888;text-transform:uppercase;letter-spacing:.05em">Total medido</div><div style="font-size:16px;font-weight:700;color:var(--vs-green)" id="srv-total-medido-modal">R$ 0</div></div>
+          <div><div style="font-size:10px;color:#888;text-transform:uppercase;letter-spacing:.05em">Saldo a medir</div><div style="font-size:16px;font-weight:700;color:var(--vs-amber)" id="srv-saldo-modal">R$ 0</div></div>
+        </div>
+      </div>
+    </div>
+    <div class="mf"><button class="btn-cancel" onclick="closeModal('modal-servico')">Cancelar</button><button class="btn-save" onclick="salvarServico()">Salvar</button></div>
+  </div>
+</div>
+
+<!-- MODAL MEDIÇÃO -->
+<div class="modal-bg" id="modal-medicao">
+  <div class="modal" style="max-width:420px">
+    <div class="mh"><div class="mt">Nova medição</div><button class="mc" onclick="closeModal('modal-medicao')">×</button></div>
+    <div class="fg">
+      <div class="fgf"><label class="fl">Data da medição</label><input id="med-data" type="date"></div>
+      <div class="fgf"><label class="fl">Valor medido (R$) *</label><input id="med-valor" type="text" placeholder="0,00" inputmode="numeric"></div>
+      <div class="fgf"><label class="fl">Descrição</label><input id="med-desc" type="text" placeholder="Ex: Medição #1 — fundação"></div>
+    </div>
+    <div class="mf"><button class="btn-cancel" onclick="closeModal('modal-medicao')">Cancelar</button><button class="btn-save" onclick="salvarMedicao()">Adicionar</button></div>
+  </div>
+</div>
 <div class="confirm-bg" id="confirm-del">
   <div class="confirm-box">
     <div class="confirm-title">Excluir proposta?</div>
