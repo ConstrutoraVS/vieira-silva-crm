@@ -9,7 +9,7 @@
   import { getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged }
     from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
   import { getFirestore, collection, doc, addDoc, updateDoc, deleteDoc, getDoc, getDocs,
-    onSnapshot, serverTimestamp, query, orderBy }
+    onSnapshot, serverTimestamp, query, orderBy, setDoc }
     from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
 
   // ============================================================
@@ -538,8 +538,7 @@
       const {createUserWithEmailAndPassword} = await import("https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js");
       const tmpAuth = getAuth(app);
       const cred = await createUserWithEmailAndPassword(tmpAuth, email, senha);
-      await setDoc ? setDoc(doc(db,'usuarios',cred.user.uid),{nome,email,role,criadoEm:serverTimestamp()})
-        : addDoc(collection(db,'usuarios'),{uid:cred.user.uid,nome,email,role,criadoEm:serverTimestamp()});
+      await setDoc(doc(db,'usuarios',cred.user.uid),{nome,email,role,criadoEm:serverTimestamp()});
       closeModal('modal-usuario'); showToast('Usuário criado!');
     } catch(e) {
       if(e.code==='auth/email-already-in-use') err.textContent='E-mail já em uso.';
@@ -1221,6 +1220,41 @@
     closeModal('modal-servico');
     showToast('Serviço atualizado!');
     renderServicos();
+  };
+
+  // ---- REVISÕES ----
+  window.renderRevisoesProposta = function() {
+    const el=document.getElementById('f-revisoes-preview');
+    if(!el)return;
+    const revs=window._revisoesProposta||[];
+    if(!revs.length){el.innerHTML='';return;}
+    el.innerHTML=`<div class="revisoes-list">${revs.map((r,i)=>`<div class="revisao-chip"><span class="rev-chip">${r.rev}</span><span class="rev-valor">R$ ${Number(r.valor).toLocaleString('pt-BR')}</span>${r.motivo?`<span class="rev-motivo">${r.motivo}</span>`:''}<button type="button" class="rev-del" onclick="removerRevisao(${i})">✕</button></div>`).join('')}</div>`;
+  };
+
+  window.abrirModalRevisao=()=>{
+    const revs=window._revisoesProposta||[];
+    const next='Rev'+String(revs.length+1).padStart(2,'0');
+    document.getElementById('rev-nome').textContent=next;
+    document.getElementById('rev-valor').value='';
+    document.getElementById('rev-motivo').value='';
+    document.getElementById('modal-revisao').classList.add('open');
+    setTimeout(()=>document.getElementById('rev-valor').focus(),100);
+  };
+
+  window.salvarRevisao=()=>{
+    const valor=valorToFloat(document.getElementById('rev-valor').value);
+    if(!valor){showToast('Informe o valor.');return;}
+    if(!window._revisoesProposta)window._revisoesProposta=[];
+    const rev='Rev'+String(window._revisoesProposta.length+1).padStart(2,'0');
+    window._revisoesProposta.push({rev,valor,motivo:document.getElementById('rev-motivo').value.trim(),data:nowStr()});
+    window.renderRevisoesProposta();
+    closeModal('modal-revisao');
+  };
+
+  window.removerRevisao=(idx)=>{
+    if(!window._revisoesProposta)return;
+    window._revisoesProposta.splice(idx,1);
+    window.renderRevisoesProposta();
   };
 
   // ---- PAINEL ----
