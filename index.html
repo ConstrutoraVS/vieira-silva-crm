@@ -721,7 +721,7 @@
       filtroSel.innerHTML='<option value="">Todos os clientes</option>'+nomes.map(n=>`<option value="${n}">${n}</option>`).join('');
       if(filtroCliente) filtroSel.value=filtroCliente;
     }
-    const KANBAN_ORDER=[0,2,4,5,6,7];
+    const KANBAN_ORDER=[2,4,5,0,6,7];
     KANBAN_ORDER.forEach(si=>{
       const label=STAGE_SHORT[si];
       const filtroNome=document.getElementById('funil-filtro-nome')?.value.toLowerCase().trim()||'';
@@ -969,6 +969,111 @@
     const revs=window._revisoesProposta||[];
     if(!revs.length){el.innerHTML='';return;}
     el.innerHTML=`<div class="revisoes-list">${revs.map((r,i)=>`<div class="revisao-chip"><span class="rev-chip">${r.rev}</span><span class="rev-valor">R$ ${Number(r.valor).toLocaleString('pt-BR')}</span>${r.motivo?`<span class="rev-motivo">${r.motivo}</span>`:''}<button type="button" class="rev-del" onclick="removerRevisao(${i})">✕</button></div>`).join('')}</div>`;
+  }
+
+  let _srvView = 'geral';
+
+  window.switchSrvView = (view) => {
+    _srvView = view;
+    document.getElementById('srv-view-geral').style.display = view==='geral' ? 'block' : 'none';
+    document.getElementById('srv-view-cliente').style.display = view==='cliente' ? 'block' : 'none';
+    document.getElementById('srv-filtros-geral').style.display = view==='geral' ? 'flex' : 'none';
+    document.getElementById('srv-btn-geral').classList.toggle('active', view==='geral');
+    document.getElementById('srv-btn-cliente').classList.toggle('active', view==='cliente');
+    if(view==='cliente') renderServicosPorCliente();
+    else renderServicos();
+  };
+
+  function renderServicosPorCliente() {
+    const cont = document.getElementById('servicos-por-cliente');
+    if(!cont) return;
+    const hoje = new Date();
+    const ganhas = propostas.filter(p => Number(p.etapa) === 6);
+    // Agrupar por cliente
+    const porCliente = {};
+    ganhas.forEach(p => {
+      const cl = p.cliente || 'Sem cliente';
+      if(!porCliente[cl]) porCliente[cl] = [];
+      porCliente[cl].push(p);
+    });
+    const clientes = Object.keys(porCliente).sort();
+    if(!clientes.length) { cont.innerHTML='<div class="empty">Nenhum serviço ganho cadastrado.</div>'; return; }
+
+    cont.innerHTML = clientes.map(cl => {
+      const servicos = porCliente[cl];
+      const totalContrato = servicos.reduce((a,p) => a + (Number(p.srvValorContrato)||Number(p.valor)||0), 0);
+      const totalMedido = servicos.reduce((a,p) => a + (p.srvMedicoes||[]).reduce((b,m)=>b+Number(m.valor||0),0), 0);
+      const saldo = totalContrato - totalMedido;
+      const emAndamento = servicos.filter(p=>(p.srvStatus||'nao_iniciado')==='iniciado').length;
+      const pctGeral = totalContrato>0 ? Math.min(100,Math.round(totalMedido/totalContrato*100)) : 0;
+
+      const STATUS_ICON = {nao_iniciado:'⚪',iniciado:'🟡',concluido:'🟢'};
+      const STATUS_LABEL = {nao_iniciado:'Não iniciado',iniciado:'Em andamento',concluido:'Concluído'};
+      const STATUS_COR = {nao_iniciado:'#aaa',iniciado:'#F59E0B',concluido:'#16a34a'};
+
+      const servicosHtml = servicos.map(p => {
+        const contrato = Number(p.srvValorContrato)||Number(p.valor)||0;
+        const medido = (p.srvMedicoes||[]).reduce((a,m)=>a+Number(m.valor||0),0);
+        const saldoP = contrato - medido;
+        const pct = contrato>0 ? Math.min(100,Math.round(medido/contrato*100)) : 0;
+        const status = p.srvStatus||'nao_iniciado';
+
+        let prazoHtml = '';
+        if(p.srvDataInicio && status==='iniciado') {
+          const inicio = new Date(p.srvDataInicio+'T00:00:00');
+          const dias = Math.floor((hoje-inicio)/(1000*60*60*24));
+          const prazo = p.srvPrazoDias||0;
+          const pctPrazo = prazo>0 ? Math.min(100,Math.round(dias/prazo*100)) : 0;
+          const corPrazo = pctPrazo>=100?'#E24B4A':pctPrazo>=80?'#F59E0B':'#1565C0';
+          const restantes = prazo>0 ? Math.max(0,prazo-dias) : null;
+          prazoHtml = `<div style="margin-top:6px">
+            <div style="display:flex;justify-content:space-between;font-size:10px;color:#888;margin-bottom:2px">
+              <span>⏱ ${dias} dias corridos ${prazo?`/ ${prazo} dias contratados`:''}</span>
+              ${prazo?`<span style="color:${corPrazo};font-weight:700">${restantes>0?`${restantes}d restantes`:'⚠ Vencido'}</span>`:''}
+            </div>
+            ${prazo?`<div style="background:#e8eef8;border-radius:3px;height:6px;overflow:hidden"><div style="width:${pctPrazo}%;height:100%;background:${corPrazo};border-radius:3px"></div></div>`:''}
+          </div>`;
+        }
+
+        return `<div class="srv-cl-item">
+          <div class="srv-cl-item-header">
+            <span class="srv-cl-item-titulo">${p.titulo||'—'}</span>
+            <span style="font-size:11px;color:${STATUS_COR[status]};font-weight:700">${STATUS_ICON[status]} ${STATUS_LABEL[status]}</span>
+          </div>
+          ${prazoHtml}
+          <div class="srv-cl-item-vals">
+            <div><div style="font-size:9px;color:#aaa;text-transform:uppercase">Contrato</div><div style="font-size:12px;font-weight:700;color:#1a1a1a">R$ ${contrato.toLocaleString('pt-BR')}</div></div>
+            <div><div style="font-size:9px;color:#aaa;text-transform:uppercase">Medido</div><div style="font-size:12px;font-weight:700;color:var(--vs-green)">R$ ${medido.toLocaleString('pt-BR')}</div></div>
+            <div><div style="font-size:9px;color:#aaa;text-transform:uppercase">Saldo</div><div style="font-size:12px;font-weight:700;color:var(--vs-amber)">R$ ${saldoP.toLocaleString('pt-BR')}</div></div>
+          </div>
+          <div style="margin-top:6px">
+            <div style="display:flex;justify-content:space-between;font-size:9px;color:#aaa;margin-bottom:2px"><span>Medição</span><span>${pct}%</span></div>
+            <div style="background:#e8eef8;border-radius:3px;height:5px;overflow:hidden"><div style="width:${pct}%;height:100%;background:var(--vs-blue);border-radius:3px"></div></div>
+          </div>
+          <div style="text-align:right;margin-top:6px"><button class="card-btn" style="font-size:11px" onclick="abrirEditServico('${p.id}')">✎ Editar</button></div>
+        </div>`;
+      }).join('');
+
+      return `<div class="srv-cl-card">
+        <div class="srv-cl-header">
+          <div class="srv-cl-avatar">${cl.substring(0,2).toUpperCase()}</div>
+          <div class="srv-cl-info">
+            <div class="srv-cl-nome">${cl}</div>
+            <div class="srv-cl-sub">${servicos.length} serviço${servicos.length!==1?'s':''} — ${emAndamento} em andamento</div>
+          </div>
+          <div class="srv-cl-totais">
+            <div class="srv-cl-total-item"><span>Contrato</span><strong>R$ ${totalContrato.toLocaleString('pt-BR')}</strong></div>
+            <div class="srv-cl-total-item"><span>Medido</span><strong style="color:var(--vs-green)">R$ ${totalMedido.toLocaleString('pt-BR')}</strong></div>
+            <div class="srv-cl-total-item"><span>Saldo</span><strong style="color:var(--vs-amber)">R$ ${saldo.toLocaleString('pt-BR')}</strong></div>
+          </div>
+        </div>
+        <div style="margin:8px 0 12px">
+          <div style="display:flex;justify-content:space-between;font-size:10px;color:#888;margin-bottom:3px"><span>Progresso geral de medições</span><span>${pctGeral}%</span></div>
+          <div style="background:#e8eef8;border-radius:4px;height:8px;overflow:hidden"><div style="width:${pctGeral}%;height:100%;background:var(--vs-blue);border-radius:4px;transition:width .4s"></div></div>
+        </div>
+        <div class="srv-cl-servicos">${servicosHtml}</div>
+      </div>`;
+    }).join('');
   }
 
   // ---- SERVIÇOS ----
@@ -1537,6 +1642,28 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;backgrou
 .usuario-role-badge{font-size:11px;padding:3px 10px;border-radius:20px;font-weight:700;flex-shrink:0}
 .u-err{font-size:12px;color:#A32D2D;min-height:16px;margin-top:4px;text-align:center}
 
+/* TOGGLE SERVIÇOS */
+.srv-toggle-wrap{display:flex;background:#e8eef8;border-radius:20px;padding:3px;gap:2px}
+.srv-toggle-btn{padding:5px 14px;font-size:12px;font-family:inherit;background:transparent;border:none;border-radius:18px;cursor:pointer;color:#666;font-weight:500;transition:all .2s;white-space:nowrap}
+.srv-toggle-btn.active{background:var(--vs-blue);color:#fff;font-weight:700;box-shadow:0 1px 4px rgba(0,0,0,.15)}
+
+/* VISÃO POR CLIENTE */
+.srv-cl-card{background:#fff;border:1px solid #dce4f0;border-radius:12px;padding:16px;margin-bottom:14px;border-top:4px solid var(--vs-blue)}
+.srv-cl-header{display:flex;align-items:center;gap:12px;margin-bottom:10px;flex-wrap:wrap}
+.srv-cl-avatar{width:44px;height:44px;border-radius:50%;background:var(--vs-blue);color:#fff;display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:800;flex-shrink:0}
+.srv-cl-info{flex:1;min-width:0}
+.srv-cl-nome{font-size:15px;font-weight:700;color:#1a1a1a}
+.srv-cl-sub{font-size:11px;color:#888;margin-top:2px}
+.srv-cl-totais{display:flex;gap:16px;flex-wrap:wrap;flex-shrink:0}
+.srv-cl-total-item{text-align:center}
+.srv-cl-total-item span{display:block;font-size:9px;color:#aaa;text-transform:uppercase;letter-spacing:.05em}
+.srv-cl-total-item strong{font-size:13px;color:#1a1a1a}
+.srv-cl-servicos{display:flex;flex-direction:column;gap:8px}
+.srv-cl-item{background:#f8faff;border:1px solid #dce8f8;border-radius:8px;padding:10px 12px}
+.srv-cl-item-header{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:6px;flex-wrap:wrap}
+.srv-cl-item-titulo{font-size:12px;font-weight:700;color:#1a1a1a;flex:1;min-width:0}
+.srv-cl-item-vals{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:8px}
+
 /* SERVIÇOS */
 .srv-prazo-wrap{margin:6px 0;background:#f8faff;border:1px solid #dce8f8;border-radius:7px;padding:7px 9px}
 .srv-prazo-header{display:flex;align-items:center;justify-content:space-between;gap:6px;flex-wrap:wrap}
@@ -1707,15 +1834,22 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;backgrou
     <div class="sec-header">
       <div class="sec-title">Serviços em andamento</div>
       <div class="action-group">
-        <select id="srv-filtro-status" onchange="renderServicos()" style="font-size:12px;padding:6px 12px;border-radius:20px;border:1px solid #ddd;background:#fff;font-family:inherit">
-          <option value="">Todos os status</option>
-          <option value="nao_iniciado">⚪ Não iniciado</option>
-          <option value="iniciado">🟡 Iniciado</option>
-          <option value="concluido">🟢 Concluído</option>
-        </select>
-        <select id="srv-filtro-cliente" onchange="renderServicos()" style="font-size:12px;padding:6px 12px;border-radius:20px;border:1px solid #ddd;background:#fff;font-family:inherit">
-          <option value="">Todos os clientes</option>
-        </select>
+        <!-- CHAVE SELETORA -->
+        <div class="srv-toggle-wrap">
+          <button class="srv-toggle-btn active" id="srv-btn-geral" onclick="switchSrvView('geral')">⊞ Geral</button>
+          <button class="srv-toggle-btn" id="srv-btn-cliente" onclick="switchSrvView('cliente')">👤 Por cliente</button>
+        </div>
+        <div id="srv-filtros-geral" style="display:flex;gap:8px">
+          <select id="srv-filtro-status" onchange="renderServicos()" style="font-size:12px;padding:6px 12px;border-radius:20px;border:1px solid #ddd;background:#fff;font-family:inherit">
+            <option value="">Todos os status</option>
+            <option value="nao_iniciado">⚪ Não iniciado</option>
+            <option value="iniciado">🟡 Iniciado</option>
+            <option value="concluido">🟢 Concluído</option>
+          </select>
+          <select id="srv-filtro-cliente" onchange="renderServicos()" style="font-size:12px;padding:6px 12px;border-radius:20px;border:1px solid #ddd;background:#fff;font-family:inherit">
+            <option value="">Todos os clientes</option>
+          </select>
+        </div>
       </div>
     </div>
     <!-- MÉTRICAS SERVIÇOS -->
@@ -1726,9 +1860,15 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;backgrou
       <div class="metric"><div class="mlabel">Total medido</div><div class="mval green" id="srv-m-medido">R$ 0</div></div>
       <div class="metric"><div class="mlabel">Saldo a medir</div><div class="mval amber" id="srv-m-saldo">R$ 0</div></div>
     </div>
-    <!-- KANBAN SERVIÇOS -->
-    <div class="kanban-wrap">
-      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;min-width:600px" id="servicos-board"></div>
+    <!-- VISÃO GERAL (kanban) -->
+    <div id="srv-view-geral">
+      <div class="kanban-wrap">
+        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;min-width:600px" id="servicos-board"></div>
+      </div>
+    </div>
+    <!-- VISÃO POR CLIENTE -->
+    <div id="srv-view-cliente" style="display:none">
+      <div id="servicos-por-cliente"></div>
     </div>
   </div>
 
