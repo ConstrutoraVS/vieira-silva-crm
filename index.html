@@ -121,6 +121,7 @@
     unsubPropostas = onSnapshot(query(collection(db,'propostas'),orderBy('criadoEm','desc')), snap=>{
       propostas=snap.docs.map(d=>({id:d.id,...d.data()}));
       renderKanban();
+      renderDashboard();
       if (!_archiveChecked) { _archiveChecked = true; setTimeout(()=>arquivarPropostasPassadas(), 2000); }
       if(document.getElementById('prop-gp-body')?.style.display==='block'){
         popularMesesGP(); renderPropGP(_pgpFiltro||'todas');
@@ -129,6 +130,7 @@
     unsubAlertas = onSnapshot(query(collection(db,'alertas'),orderBy('criadoEm','desc')), snap=>{
       alertas=snap.docs.map(d=>({id:d.id,...d.data()}));
       renderAlertas();
+      renderDashboard();
     });
     unsubClientes = onSnapshot(query(collection(db,'clientes'),orderBy('nome','asc')), snap=>{
       clientes=snap.docs.map(d=>({id:d.id,...d.data()}));
@@ -1683,89 +1685,71 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;backgrou
 
   <!-- DASHBOARD -->
   <div id="panel-dashboard" class="panel active">
-
-    <!-- HERO EXECUTIVO -->
-    <div class="dash-hero" style="margin-bottom:16px">
+    <!-- HERO -->
+    <div class="dash-hero">
       <div>
         <div class="dash-kicker">Construtora Vieira &amp; Silva</div>
-        <h2 style="font-size:22px">Painel Executivo</h2>
-        <p style="opacity:.7;font-size:12px">Atualizado em tempo real</p>
+        <h2>Gestão Comercial</h2>
+        <p>Visão geral em tempo real — propostas, serviços e agenda</p>
       </div>
-      <div style="display:flex;flex-direction:column;align-items:flex-end;gap:10px">
-        <div class="srv-toggle-wrap" style="background:rgba(255,255,255,.15)">
-          <button class="srv-toggle-btn active" id="dash-btn-mensal" onclick="switchDashPeriodo('mensal')" style="color:#fff">📅 Mensal</button>
-          <button class="srv-toggle-btn" id="dash-btn-anual" onclick="switchDashPeriodo('anual')" style="color:rgba(255,255,255,.6)">📆 Anual</button>
-        </div>
-        <div style="font-size:12px;opacity:.7" id="dash-periodo-label"></div>
+      <div style="display:flex;gap:20px;flex-wrap:wrap;justify-content:flex-end">
+        <div style="text-align:center"><div style="font-size:11px;opacity:.65">Propostas ativas</div><div style="font-size:28px;font-weight:800" id="m-total-hero">—</div></div>
+        <div style="text-align:center"><div style="font-size:11px;opacity:.65">Ganho no mês</div><div style="font-size:22px;font-weight:800;color:#7FDDBB" id="m-ganho-hero">—</div></div>
       </div>
     </div>
 
-    <!-- KPIs PRINCIPAIS -->
-    <div class="dash-kpis">
-      <div class="dash-kpi dash-kpi-green">
-        <div class="dash-kpi-icon">💰</div>
-        <div class="dash-kpi-body">
-          <div class="dash-kpi-label">Faturamento contratado</div>
-          <div class="dash-kpi-val" id="kpi-faturamento">R$ 0</div>
-          <div class="dash-kpi-sub" id="kpi-faturamento-sub">no período</div>
-        </div>
-      </div>
-      <div class="dash-kpi dash-kpi-blue">
-        <div class="dash-kpi-icon">📋</div>
-        <div class="dash-kpi-body">
-          <div class="dash-kpi-label">Pipeline em aberto</div>
-          <div class="dash-kpi-val" id="kpi-pipeline">R$ 0</div>
-          <div class="dash-kpi-sub" id="kpi-pipeline-sub">propostas ativas</div>
-        </div>
-      </div>
-      <div class="dash-kpi dash-kpi-amber">
-        <div class="dash-kpi-icon">🔧</div>
-        <div class="dash-kpi-body">
-          <div class="dash-kpi-label">Saldo a medir</div>
-          <div class="dash-kpi-val" id="kpi-saldo-medir">R$ 0</div>
-          <div class="dash-kpi-sub" id="kpi-saldo-sub">de serviços ativos</div>
-        </div>
-      </div>
-      <div class="dash-kpi dash-kpi-purple">
-        <div class="dash-kpi-icon">🎯</div>
-        <div class="dash-kpi-body">
-          <div class="dash-kpi-label">Taxa de conversão</div>
-          <div class="dash-kpi-val" id="kpi-conversao">0%</div>
-          <div class="dash-kpi-sub" id="kpi-conversao-sub">propostas ganhas</div>
-        </div>
-      </div>
+    <!-- MÉTRICAS PROPOSTAS -->
+    <div style="margin-bottom:10px;font-size:11px;font-weight:700;color:#888;text-transform:uppercase;letter-spacing:.06em">📋 Propostas</div>
+    <div class="metrics" style="margin-bottom:1.25rem">
+      <div class="metric"><div class="mlabel">Propostas ativas</div><div class="mval blue" id="m-total">0</div></div>
+      <div class="metric"><div class="mlabel">Ganho no mês</div><div class="mval green" id="m-ganho">R$ 0</div></div>
+      <div class="metric"><div class="mlabel">Pipeline total</div><div class="mval amber" id="m-pipeline">R$ 0</div></div>
     </div>
 
-    <!-- LINHA 2 -->
-    <div class="dash-layout3" style="margin-top:14px">
-      <!-- FUNIL COMERCIAL -->
+    <!-- MÉTRICAS SERVIÇOS -->
+    <div style="margin-bottom:10px;font-size:11px;font-weight:700;color:#888;text-transform:uppercase;letter-spacing:.06em">🔧 Serviços</div>
+    <div class="metrics" style="margin-bottom:1.25rem">
+      <div class="metric"><div class="mlabel">Total serviços</div><div class="mval blue" id="dash-srv-total">0</div></div>
+      <div class="metric"><div class="mlabel">Em andamento</div><div class="mval amber" id="dash-srv-andamento">0</div></div>
+      <div class="metric"><div class="mlabel">Valor contratado</div><div class="mval blue" id="dash-srv-valor">R$ 0</div></div>
+      <div class="metric"><div class="mlabel">Total medido</div><div class="mval green" id="dash-srv-medido">R$ 0</div></div>
+      <div class="metric"><div class="mlabel">Saldo a medir</div><div class="mval amber" id="dash-srv-saldo">R$ 0</div></div>
+    </div>
+
+    <!-- LINHA PRINCIPAL -->
+    <div class="dash-layout3">
       <div class="dash-card">
-        <div class="dash-card-title" style="font-size:13px;font-weight:800;color:#1a1a1a;margin-bottom:12px">📊 Funil comercial</div>
-        <div id="dash-funil-visual"></div>
-        <div style="margin-top:14px;padding-top:12px;border-top:1px solid #f0efea">
-          <div id="dash-chart-bars" style="display:flex;align-items:flex-end;gap:5px;height:70px"></div>
-          <div id="dash-chart-labels" style="display:flex;gap:5px;margin-top:4px"></div>
+        <div class="dash-card-title">📊 Pipeline por etapa</div>
+        <div id="dash-pipeline-stages"></div>
+        <div style="margin-top:14px;border-top:1px solid #f0efea;padding-top:12px">
+          <div class="dash-card-title" style="margin-bottom:8px">Distribuição visual</div>
+          <div id="dash-chart-bars" style="display:flex;align-items:flex-end;gap:6px;height:80px;padding:0 4px"></div>
+          <div id="dash-chart-labels" style="display:flex;gap:6px;margin-top:4px"></div>
         </div>
       </div>
-      <!-- SERVIÇOS -->
       <div class="dash-card">
-        <div class="dash-card-title" style="font-size:13px;font-weight:800;color:#1a1a1a;margin-bottom:12px">🔧 Serviços em execução</div>
-        <div id="dash-servicos-saude"></div>
-      </div>
-      <!-- HOJE -->
-      <div class="dash-card">
-        <div class="dash-card-title" style="font-size:13px;font-weight:800;color:#1a1a1a;margin-bottom:8px">🔔 Hoje</div>
+        <div class="dash-card-title">🔔 Alertas de hoje</div>
         <div id="dash-alertas-hoje"></div>
-        <div style="margin-top:12px;padding-top:10px;border-top:1px solid #f0efea">
-          <div style="font-size:11px;font-weight:700;color:#888;margin-bottom:6px">📅 FOLLOW-UPS DE HOJE</div>
+        <div style="margin-top:14px;border-top:1px solid #f0efea;padding-top:10px">
+          <div class="dash-card-title" style="margin-bottom:8px">Follow-ups de hoje</div>
           <div id="dash-followups-hoje"></div>
+        </div>
+      </div>
+      <div class="dash-card">
+        <div class="dash-card-title">📋 Propostas ativas</div>
+        <div id="dash-recentes"></div>
+        <div style="margin-top:14px;border-top:1px solid #f0efea;padding-top:10px">
+          <div class="dash-card-title" style="margin-bottom:8px">🔧 Serviços em andamento</div>
+          <div id="dash-servicos-andamento"></div>
         </div>
       </div>
     </div>
 
     <!-- AGENDA -->
-    <div class="agenda-wrap" style="margin-top:14px">
-      <div class="agenda-title-row"><div class="agenda-title">📅 Agenda — próximos 14 dias</div></div>
+    <div class="agenda-wrap">
+      <div class="agenda-title-row">
+        <div class="agenda-title">📅 Agenda — próximos 14 dias</div>
+      </div>
       <div class="agenda-scroll" id="agenda-container"></div>
     </div>
 
@@ -1791,7 +1775,6 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;backgrou
       </div>
     </div>
   </div>
-
   <!-- FUNIL / KANBAN -->
   <div id="panel-funil" class="panel">
     <div class="sec-header">
