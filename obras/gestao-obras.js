@@ -224,6 +224,8 @@ export function iniciarGestaoObras(ctx) {
 
 function parar() {
   _assinado = null;
+  // ao sair, descarrega o mapa (o iframe guarda a sessão de quem estava logado)
+  const corpo = $("obra-corpo"); if (corpo) { corpo.innerHTML = ""; corpo.dataset.mapa = ""; }
   [S.unsubObras, S.unsubUsuarios, S.unsubItens, S.unsubRdos].forEach(u => u && u());
   Object.assign(S, { obras: [], usuarios: [], unsubObras: null, unsubUsuarios: null, obraId: null, unsubItens: null, unsubRdos: null, itens: [], rdos: [], modelo: null });
 }
@@ -234,6 +236,14 @@ async function assinarGeral() {
   parar();
   _assinado = uid();
   try { const r = await fetch("obras/obras.json", { cache: "no-cache" }); S.obrasJson = r.ok ? await r.json() : []; } catch (e) { S.obrasJson = []; }
+  // Obras do obras.json: só aparecem como "legadas" se ainda NÃO foram cadastradas no banco.
+  // Se já foram e o usuário não está na equipe, a leitura é negada → a obra some da lista dele.
+  if (C.perfil() !== "admin") {
+    const chec = await Promise.all(S.obrasJson.map(async j => {
+      try { const d = await getDoc(doc(C.db, "obras", j.id)); return (!d.exists() || !d.data().membros) ? j : null; } catch (e) { return null; }
+    }));
+    S.obrasJson = chec.filter(Boolean);
+  }
   S.unsubUsuarios = onSnapshot(collection(C.db, "usuarios"), snap => {
     S.usuarios = snap.docs.map(d => ({ id: d.id, ...d.data() })).sort((a, b) => String(a.nome || a.email).localeCompare(String(b.nome || b.email), "pt-BR"));
   }, e => console.warn("usuarios", e));
@@ -1200,8 +1210,15 @@ async function novoRdo() {
 function abrirRdoEditor(id) {
   const r = S.rdos.find(x => x.id === id);
   if (!r) { $("obra-corpo").innerHTML = `<div class="obra-vazio"><h3>Relatório de ${fmtData(id)} não encontrado</h3><p><a href="#acompanhamento/${encodeURIComponent(S.obraId)}/rdo">Voltar à lista</a></p></div>`; return; }
-  if (!S.rdoEd || S.rdoEd.id !== id || !S.rdoEd.dirty) S.rdoEd = { id, dirty: false, v: JSON.parse(JSON.stringify(r, (k, val) => (val && val.toDate) ? val.toDate().toISOString() : val)) };
+  if (!S.rdoEd || S.rdoEd.id !== id || !S.rdoEd.dirty) S.rdoEd = { id, dirty: false, v: copiaSemTs(r) };
   desenharRdoEditor();
+}
+/** Cópia profunda trocando Timestamps do Firestore por texto ISO (para edição local). */
+function copiaSemTs(v) {
+  if (v && typeof v.toDate === "function") return v.toDate().toISOString();
+  if (Array.isArray(v)) return v.map(copiaSemTs);
+  if (v && typeof v === "object") return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, copiaSemTs(x)]));
+  return v;
 }
 const rdoEditavel = r => pode().registrar && ["rascunho", "enviado"].includes(r.status);
 
@@ -1216,13 +1233,14 @@ function desenharRdoEditor() {
     const prod = it && (it.modo || "manual") === "producao";
     let info = "";
     if (a.itemId && !it) info = `<span class="go-alerta">Tarefa excluída da EAP</span>`;
+    else if (prod && r.status === "cancelado") info = "";
     else if (prod) {
       const q = parseNum(a.qtd), prev = Number(it.qtdPrevista) || 0, exe = Number(it.qtdExecutada) || 0;
       const apos = r.status === "aprovado" ? exe : arred(exe + (q > 0 ? q : 0));
       info = `Acumulado ${r.status === "aprovado" ? "" : "aprovado "}${fmtNum(exe)} / ${fmtNum(prev)} ${esc(it.unidade || "")}${r.status !== "aprovado" && q > 0 ? ` → após aprovação ${fmtNum(apos)}` : ""}${prev > 0 && apos > prev + 1e-9 ? ` <span class="go-alerta">▲ acima do previsto (${fmtPct(apos / prev * 100)})</span>` : ""}${prev <= 0 ? ` <span class="go-alerta">⚠️ sem quantidade prevista</span>` : ""}`;
     } else if (it) info = `Avanço atual ${fmtPct(Number(it.percentual) || 0)}`;
     return `<div class="go-ativ">
-      <div class="go-ativ-t">${it || a.codigo ? `<b>${esc(it ? it.codigo : a.codigo)}</b> ${esc(it ? it.descricao : a.descricao)}` : `<input data-k="atividades.${i}.descricao" value="${esc(a.descricao || "")}" placeholder="Descrição da atividade (sem tarefa vinculada)" ${dis}>`}
+      <div class="go-ativ-t">${it || a.codigo ? `<span><b>${esc(it ? it.codigo : a.codigo)}</b> ${esc(it ? it.descricao : a.descricao)}</span>` : `<input data-k="atividades.${i}.descricao" value="${esc(a.descricao || "")}" placeholder="Descrição da atividade (sem tarefa vinculada)" ${dis}>`}
         ${E ? `<button class="card-btn del" onclick="GO.rdoRemover('atividades',${i})" title="Remover">🗑</button>` : ""}</div>
       <div class="go-ativ-c">
         ${prod ? `<div class="fgf"><label class="fl">Quantidade executada no dia (${esc(it.unidade || "")})</label><input data-k="atividades.${i}.qtd" inputmode="decimal" value="${esc(a.qtd ?? "")}" ${dis}></div>`
@@ -1286,7 +1304,7 @@ function desenharRdoEditor() {
     </section>
   </div>
   <section class="go-sec"><h3>✍️ Autoria e aprovação</h3>
-    <div class="go-resumo"><div>Autor: <b>${esc(r.autorNome || "—")}</b></div><div>Responsável pela aprovação: <b>${esc(r.aprovadorNome || "—")}</b>${r.aprovadoEm ? ` em ${fmtDataHora(r.aprovadoEm)}` : ""}</div></div>
+    <div class="go-resumo"><div>Autor: <b>${esc(r.autorNome || "—")}</b></div><div>Responsável pela aprovação: <b>${esc(r.aprovadorNome || "—")}</b>${r.aprovadoEm && fmtDataHora(r.aprovadoEm) !== "—" ? ` em ${fmtDataHora(r.aprovadoEm)}` : ""}</div></div>
     <div class="go-hist">${eventos.map(e => `<div class="go-hist-i"><div class="go-hist-h"><b>${esc(e.porNome || "—")}</b> · ${fmtDataHora(e.emISO)} · ${esc({ criar: "criou", salvar: "salvou", enviar: "enviou para aprovação", rascunho: "voltou para rascunho", devolver: "devolveu para correção", aprovar: "aprovou", reabrir: "reabriu para correção", cancelar: "cancelou" }[e.acao] || e.acao)}${e.versao ? ` (versão ${e.versao})` : ""}</div>${e.motivo ? `<div class="go-muted">Motivo: ${esc(e.motivo)}</div>` : ""}</div>`).join("")}</div>
   </section>
   <div class="go-erro" id="rdo-err"></div>
@@ -1514,7 +1532,7 @@ export async function estornarRdoTx(obraId, rdoId, novoStatus, motivo, ctx = { d
       let pNovo = pAtual, revertido = true;
       if (l.percentualDepois !== l.percentualAntes) { if (pAtual === l.percentualDepois) pNovo = l.percentualAntes; else revertido = false; }
       const eref = Rf("lancamentos", l.id + "__estorno");
-      tx.set(eref, { tipo: "estorno", origem: l.id, rdoId, versao: l.versao, itemId: l.itemId, codigo: it.codigo, modo: it.modo || "manual", qtd: -(Number(l.qtd) || 0), antes, depois,
+      tx.set(eref, { tipo: "estorno", origem: l.id, rdoId, versao: l.versao, itemId: l.itemId, codigo: it.codigo, modo: it.modo || "manual", qtd: -(Number(l.qtd) || 0) || 0, antes, depois,
         unidade: it.unidade || "", percentualAntes: pAtual, percentualDepois: pNovo, percentualRevertido: revertido, motivo, data: r.data, autorUid: ctx.uid, autorNome: ctx.nome, em: serverTimestamp() });
       const patch = { ultimoLanc: eref.id };
       if (l.qtd) patch.qtdExecutada = depois;
@@ -1608,7 +1626,7 @@ function graficoEvolucao(pts, rotuloAvanco) {
   const t0 = new Date(pts[0].data + "T12:00").getTime(), t1 = new Date(pts[pts.length - 1].data + "T12:00").getTime();
   const x = d => L + (new Date(d + "T12:00").getTime() - t0) / Math.max(1, t1 - t0) * (W - L - Rr);
   const y = v => T + (100 - v) / 100 * (H - T - B);
-  const SER = [["previsto", "Previsto (término)", "#7A8BA6", "5 4"], ["concluidas", "Tarefas concluídas", "#1D9E75", ""], ["avanco", rotuloAvanco, "#0E6FCC", ""]];
+  const SER = [["previsto", "Previsto (término)", "#3F4A5C", "5 4"], ["concluidas", "Tarefas concluídas", "#1D9E75", ""], ["avanco", rotuloAvanco, "#0E6FCC", ""]];
   const path = k => pts.map((p, i) => `${i ? "L" : "M"}${x(p.data).toFixed(1)},${y(p[k]).toFixed(1)}`).join("");
   const ult = pts[pts.length - 1];
   const hojeX = x(hojeISO());
@@ -1679,8 +1697,8 @@ function renderPainel() {
       <div class="go-etapa-t"><b>${esc(e.codigo)}</b> ${esc(e.descricao)}</div>
       <div class="go-etapa-b">${barra(ce.total ? cr.valor : 0)}<span class="go-pct">${ce.total ? fmtPct(cr.valor) + (ce.ponderado == null ? "*" : "") : "—"}</span></div>
       <div class="go-muted">${ce.concluida}/${ce.total} concluídas${ce.atrasadas ? ` · <span class="go-chip c-atraso">${ce.atrasadas} atrasada(s)</span>` : ""}</div></div>`; }).join("")}
-      <div class="go-dica">* média simples (há tarefas sem peso na etapa).</div></section>
-    <section class="go-sec"><h3>Produção por unidade</h3>${porUn.size ? `<table class="go-tab"><tr><th>Unidade</th><th>Tarefas</th><th>Executado</th><th>Previsto</th><th>%</th></tr>${[...porUn].map(([u, g]) => `<tr><td>${esc(u)}</td><td>${g.n}</td><td>${fmtNum(g.exe)}</td><td>${fmtNum(g.prev)}</td><td>${g.prev > 0 ? fmtPct(g.exe / g.prev * 100) : "—"}${g.acima ? ` <span class="go-alerta" title="${g.acima} tarefa(s) acima do previsto">▲${g.acima}</span>` : ""}</td></tr>`).join("")}</table>
+      ${etapas.some(e => e.cons.total && e.cons.ponderado == null) ? `<div class="go-dica">* média simples (há tarefas sem peso na etapa).</div>` : ""}</section>
+    <section class="go-sec"><h3>Produção por unidade</h3>${porUn.size ? `<table class="go-tab"><thead><tr><th>Unidade</th><th>Tarefas</th><th>Executado</th><th>Previsto</th><th>%</th></tr></thead><tbody>${[...porUn].map(([u, g]) => `<tr><td>${esc(u)}</td><td>${g.n}</td><td>${fmtNum(g.exe)}</td><td>${fmtNum(g.prev)}</td><td>${g.prev > 0 ? fmtPct(g.exe / g.prev * 100) : "—"}${g.acima ? ` <span class="go-alerta" title="${g.acima} tarefa(s) acima do previsto">▲${g.acima}</span>` : ""}</td></tr>`).join("")}</tbody></table>
       <div class="go-dica">Quantidades de unidades diferentes (m², m³, kg…) não são somadas entre si.</div>` : `<div class="go-muted">Nenhuma tarefa acompanhada por produção.</div>`}</section>
   </div>
   <div class="go-cols">
@@ -1951,10 +1969,10 @@ function mostrarPrevia(res, nome) {
   S._import = res;
   box.innerHTML = `<div class="go-resumo"><div>Arquivo: <b>${esc(nome)}</b></div><div><b>${res.linhas.length}</b> linhas</div><div style="color:var(--vs-green)"><b>${ok.length}</b> válidas</div><div style="color:var(--vs-red)"><b>${ruins.length}</b> com erro</div>
       <div>${["etapa", "subetapa", "tarefa"].map(t => `${ok.filter(L => L.tipo === t).length} ${TIPOS[t].toLowerCase()}(s)`).join(" · ")}</div></div>
-    <div class="go-prev"><table class="go-tab"><tr><th>Linha</th><th>Código</th><th>Tipo</th><th>Descrição</th><th>Pai</th><th>Prazo</th><th>Produção</th><th>Resultado</th></tr>
+    <div class="go-prev"><table class="go-tab"><thead><tr><th>Linha</th><th>Código</th><th>Tipo</th><th>Descrição</th><th>Pai</th><th>Prazo</th><th>Produção</th><th>Resultado</th></tr></thead><tbody>
     ${res.linhas.slice(0, 1500).map(L => `<tr class="${L.erros.length ? "go-tr-erro" : ""}"><td>${L.n}</td><td>${esc(L.cod)}</td><td>${TIPOS[L.tipo] || ""}</td><td>${esc(L.descricao)}</td><td>${esc(L.paiCod)}</td>
       <td>${fmtData(L.inicioPrev)} – ${fmtData(L.fimPrev)}</td><td>${L.tipo === "tarefa" ? (L.modo === "producao" ? `${fmtNum(L.qtdPrevista)} ${esc(L.unidade)}` : "%") : ""}</td>
-      <td>${L.erros.length ? `✗ ${esc(L.erros.join(" "))}` : "✓"}${L.avisos.length ? `<div class="go-muted">⚠ ${esc(L.avisos.join(" "))}</div>` : ""}</td></tr>`).join("")}</table></div>
+      <td>${L.erros.length ? `✗ ${esc(L.erros.join(" "))}` : "✓"}${L.avisos.length ? `<div class="go-muted">⚠ ${esc(L.avisos.join(" "))}</div>` : ""}</td></tr>`).join("")}</tbody></table></div>
     ${res.linhas.length > 1500 ? `<div class="go-muted">Mostrando as primeiras 1.500 linhas na prévia.</div>` : ""}
     <div class="go-row">${ruins.length ? `<button class="btn-sm" onclick="GO.relatorioErros()">⬇️ Relatório de erros (${ruins.length})</button>` : ""}<span class="go-flex"></span>
       ${ok.length ? `<button class="btn-save" id="imp-ok">Importar ${ok.length} linha(s) válida(s)</button>` : ""}</div><div id="imp-prog"></div>`;
@@ -2236,14 +2254,14 @@ details.go-box summary{cursor:pointer}
 .go-indic-simples{color:#64748B}
 .go-etapa{padding:7px 4px;border-bottom:1px solid #F0F2F6;cursor:pointer}.go-etapa:hover{background:#F7FAFF}
 .go-etapa-t{font-size:12.5px}.go-etapa-b{display:flex;align-items:center;gap:8px;margin:3px 0}
-.go-tab{width:100%;border-collapse:collapse;font-size:12px}.go-tab th{text-align:left;background:#F4F7FB;color:#64748B;font-weight:700;padding:5px 7px;position:sticky;top:0}.go-tab td{padding:5px 7px;border-bottom:1px solid #F0F2F6;vertical-align:top}
+.go-tab{width:100%;border-collapse:collapse;font-size:12px}.go-tab th{text-align:left;background:#F4F7FB;color:#64748B;font-weight:700;padding:5px 7px}.go-prev .go-tab th{position:sticky;top:0;z-index:1}.go-tab td{padding:5px 7px;border-bottom:1px solid #F0F2F6;vertical-align:top}
 .go-tr-erro td{background:#FFF5F5}
 .go-prev{max-height:46vh;overflow:auto;border:1px solid #EEF1F5;border-radius:8px;margin-top:8px}
 .go-mini{display:flex;flex-direction:column}.go-mini>div{display:flex;justify-content:space-between;gap:10px;padding:6px 4px;border-bottom:1px solid #F0F2F6;font-size:12.5px;cursor:pointer}.go-mini>div:hover{background:#F7FAFF}
 .go-mini>div>span:last-child{color:#64748B;white-space:nowrap}
-.go-graf{position:relative}.go-graf svg{width:100%;height:auto;display:block}
+.go-graf{position:relative;max-width:900px}.go-graf svg{width:100%;height:auto;display:block}
 .go-ax{font-size:10px;fill:#8A94A6}.go-lab{font-size:10.5px;fill:#334155;font-weight:700}
-.go-leg{display:flex;gap:14px;flex-wrap:wrap;font-size:11.5px;color:#334155;margin-bottom:4px}.go-leg span{display:flex;align-items:center;gap:5px}
+.go-leg{display:flex;gap:14px;flex-wrap:wrap;font-size:11.5px;color:#334155;margin-bottom:4px}.go-leg span{display:flex;align-items:center;gap:5px;white-space:nowrap}
 .go-tip{position:absolute;top:30px;background:#fff;border:1px solid #DCE3EC;border-radius:8px;padding:6px 9px;font-size:11.5px;box-shadow:0 4px 14px rgba(0,0,0,.1);pointer-events:none;line-height:1.5}
 .go-novo-rdo{display:flex;align-items:flex-end;gap:8px}.go-novo-rdo input{width:auto}.go-novo-rdo .fl{align-self:center}
 .go-rdo-lista{display:flex;flex-direction:column;gap:8px}
