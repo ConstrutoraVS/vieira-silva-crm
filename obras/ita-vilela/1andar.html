@@ -98,6 +98,12 @@ svg .wall.sel{stroke:#1f4e79!important}
 svg .lbl{font-size:8px;font-family:"IBM Plex Sans",sans-serif;fill:#1d2329;pointer-events:none;font-weight:600;paint-order:stroke;stroke:#fff;stroke-width:1.6px}
 svg .lbl.wnum{font-size:4px;font-weight:500;fill:#4b555e;stroke-width:1.2px}
 svg .lbl.pct{font-size:7px;font-family:"IBM Plex Mono",monospace;font-weight:500}
+.catsum{cursor:pointer;font-size:12.5px;color:var(--accent);margin-top:10px;font-weight:600}
+.sumbox .big b{font-size:26px}
+body.embed header{display:none}
+body.embed main{height:calc(100% - 42px)}
+.tabs .mode{margin-left:auto;align-self:center;color:var(--ink);padding:0 4px 6px;flex:none}
+.tabs .switch{background:#b8bec4}.tabs .switch.on{background:var(--s2)}
 @media (max-width: 820px){
   main{grid-template-columns:1fr;grid-template-rows:68vh auto;height:auto}
   #mapwrap{height:68vh}
@@ -191,6 +197,7 @@ function wallServices(w,st){
 /* ---------- estado ---------- */
 const S = {};            // id -> doc data
 let db=null, user=null, canWrite=false, edit=false, myId=null;
+let lastErr=null, catsOpen=false;
 let sel=null, cat="geral", view="det", loadState="loading", qsel=null; let ORC={};
 const ELS = {}; // id -> {kind, room, wall}
 ROOMS.forEach(r=>{
@@ -352,13 +359,14 @@ function renderSum(){
   const T=totals(), p=pct(T);
   let h=`<div class="big"><b>${p}%</b><span class="hint">do 1º andar concluído (${T.c2} de ${T.n} serviços)</span></div>
   <div class="bar" style="margin-top:8px"><i style="width:${100*T.c2/T.n}%;background:var(--s2)"></i><i style="width:${100*T.c1/T.n}%;background:var(--s1)"></i></div>
-  <div class="cats">`;
+  <details id="catsd" ${catsOpen?"open":""}><summary class="catsum">Andamento por serviço</summary><div class="cats">`;
   CATS.slice(1).forEach(([k,n])=>{ const s=T.per[k]; if(!s) return; const q=pct(s);
     h+=`<span>${n}</span><div class="bar"><i style="width:${q}%;background:var(--s2)"></i></div><span class="n">${q}%</span>`; });
-  h+=`</div>`;
+  h+=`</div></details>`;
   if(loadState==="loading") h+=`<div class="hint" style="margin-top:8px">Carregando andamento…</div>`;
-  if(loadState==="offline") h+=`<div class="banner" style="margin-top:10px">Não foi possível carregar o andamento salvo agora. O mapa mostra tudo como não iniciado.</div>`;
+  if(loadState==="offline") h+=`<div class="banner" style="margin-top:10px">Não foi possível carregar o andamento salvo agora. O mapa mostra tudo como não iniciado.${lastErr?`<br><small>Motivo: ${esc(String((lastErr&&(lastErr.code||lastErr.message))||lastErr))}</small>`:""}</div>`;
   document.getElementById("sumbox").innerHTML=h;
+  const cd=document.getElementById("catsd"); if(cd) cd.ontoggle=()=>{ catsOpen=cd.open; };
 }
 
 /* ---------- painel ---------- */
@@ -646,24 +654,25 @@ function setMode(){ document.getElementById("modebox").style.display=canWrite?"f
 sw.onclick=()=>{ edit=!edit; setMode(); };
 
 /* ---------- init ---------- */
+if(window.top!==window){ document.body.classList.add("embed"); document.querySelector(".tabs").appendChild(document.getElementById("modebox")); }
 fit(); paint(); renderSide();
 addEventListener("resize",()=>{fit();});
 (async()=>{
   if(!window.claude||!claude.use){ loadState="offline"; renderSum(); return; }
-  try{ user=await claude.use("user"); }catch(e){ user=null; }
-  try{ db=await claude.use("db"); }catch(e){ db=null; }
+  try{ user=await claude.use("user"); }catch(e){ user=null; lastErr=e; }
+  try{ db=await claude.use("db"); }catch(e){ db=null; lastErr=lastErr||e; }
   if(user){ try{ myId=await user.id(); }catch(e){} }
   if(db){
     const c = user && user.can ? user.can("data.write") : null;
     canWrite = c!==false; setMode();
-    const timer=setTimeout(()=>{ if(loadState==="loading"){ loadState="offline"; renderSum(); } },10000);
+    const timer=setTimeout(()=>{ if(loadState==="loading"){ loadState="offline"; lastErr=lastErr||{code:"tempo esgotado"}; renderSum(); } },10000);
     db.collection("el").onSnapshot(snap=>{
       if(!snap.metadata.fromCache){ clearTimeout(timer); loadState="ok"; }
       for(const k in S) delete S[k];
       snap.docs.forEach(d=>{ if(d.exists && ELS[d.id]) S[d.id]=JSON.parse(JSON.stringify(d.data())); });
       if(loadState==="loading" && snap.size) loadState="ok";
       paint(); renderSide();
-    },err=>{ clearTimeout(timer); loadState="offline"; renderSum(); });
+    },err=>{ clearTimeout(timer); loadState="offline"; lastErr=err; renderSum(); });
     db.doc("cfg/orcamento-1andar").onSnapshot(d=>{ ORC = d.exists? JSON.parse(JSON.stringify(d.data())) : {}; if(view==="qty") renderSide(); },()=>{});
   } else { loadState="offline"; renderSum(); }
 })();
