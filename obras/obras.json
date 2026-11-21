@@ -1,0 +1,42 @@
+[
+  {
+    "id": "ita-vilela",
+    "nome": "Clínica Ita Vilela",
+    "endereco": "Av. Zequinha Barreto, 343 · Piedade",
+    "projeto": "Meso Arquitetura",
+    "escopo": "Demolição e construção, forro, revestimentos e pintura, hidrossanitária",
+    "status": "Em andamento",
+    "blocos": [
+      {
+        "id": "terreo",
+        "nome": "Térreo",
+        "pagina": "obras/ita-vilela/terreo.html"
+      },
+      {
+        "id": "1andar",
+        "nome": "1º andar",
+        "pagina": "obras/ita-vilela/1andar.html"
+      },
+      {
+        "id": "2andar",
+        "nome": "2º andar",
+        "pagina": null
+      },
+      {
+        "id": "cafeteria",
+        "nome": "Cafeteria",
+        "pagina": null
+      },
+      {
+        "id": "fachada",
+        "nome": "Fachada",
+        "pagina": null
+      }
+    ],
+    "migracao": {
+      "arquivo": "obras/ita-vilela/migracao-2026-11-18.json",
+      "registros": 183
+    },
+    "cronograma": null
+  }
+]
