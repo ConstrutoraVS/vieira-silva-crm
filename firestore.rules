@@ -1,0 +1,205 @@
+rules_version = '2';
+// =====================================================================
+// Regras do Firestore — CRM Construtora Vieira & Silva
+// ---------------------------------------------------------------------
+// Publicar em: Console do Firebase › Firestore Database › Regras.
+// ATENÇÃO: este arquivo substitui as regras inteiras do banco. Ele já
+// inclui o módulo Comercial (propostas, clientes, compradores, alertas,
+// usuarios), o mapa de andamento (obras/*/el, cfg) e o módulo de
+// Gestão de Obras (itens, códigos, lançamentos, RDOs, arquivos, histórico).
+//
+// Perfis globais (usuarios/<uid>.role): admin · operador · visualizador
+// Papel por obra (obras/<obra>.membros[uid]): gestor · colaborador · consulta
+//   - admin global = Administrador em todas as obras
+//   - visualizador global = no máximo Consulta, qualquer que seja o papel na obra
+// =====================================================================
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ---------- Perfil global ----------
+    function signed() { return request.auth != null; }
+    function userPath() { return /databases/$(database)/documents/usuarios/$(request.auth.uid); }
+    function perfil() {
+      return signed() && exists(userPath()) ? get(userPath()).data.get('role', 'operador') : 'nenhum';
+    }
+    function isAdmin() { return perfil() == 'admin'; }
+    function comercial() { return perfil() in ['admin', 'operador']; }
+
+    // ---------- Papel na obra ----------
+    function obraPath(o) { return /databases/$(database)/documents/obras/$(o); }
+    function papelBruto(o) {
+      return exists(obraPath(o)) ? get(obraPath(o)).data.get('membros', {}).get(request.auth.uid, '') : '';
+    }
+    // Obras ainda não migradas para o cadastro (sem documento ou sem membros):
+    // mantém o comportamento anterior do mapa (operador edita, visualizador vê).
+    function obraLegada(o) {
+      return !exists(obraPath(o)) || !('membros' in get(obraPath(o)).data);
+    }
+    function papel(o) {
+      return !signed() ? ''
+        : isAdmin() ? 'admin'
+        : obraLegada(o) ? (perfil() == 'operador' ? 'colaborador' : (perfil() == 'visualizador' ? 'consulta' : ''))
+        : perfil() == 'visualizador' ? (papelBruto(o) != '' ? 'consulta' : '')
+        : perfil() == 'operador' ? papelBruto(o)
+        : '';
+    }
+    function podeVer(o)       { return papel(o) in ['admin', 'gestor', 'colaborador', 'consulta']; }
+    function podeRegistrar(o) { return papel(o) in ['admin', 'gestor', 'colaborador']; }
+    function podeGerir(o)     { return papel(o) in ['admin', 'gestor']; }
+    // Obra de demonstração: o admin pode apagar tudo dela (inclusive histórico).
+    function apagaDemo(o) { return isAdmin() && exists(obraPath(o)) && get(obraPath(o)).data.get('demo', false) == true; }
+
+    function eu() { return request.auth.uid; }
+    function novo() { return request.resource.data; }
+    function antigo() { return resource.data; }
+    function mudou() { return novo().diff(antigo()).affectedKeys(); }
+
+    // =================== MÓDULO COMERCIAL (inalterado na prática) ===================
+    match /propostas/{id}   { allow read, write: if comercial(); }
+    match /clientes/{id}    { allow read, write: if comercial(); }
+    match /compradores/{id} { allow read, write: if comercial(); }
+    match /alertas/{id}     { allow read, write: if comercial(); }
+
+    match /usuarios/{uid} {
+      allow read: if signed();
+      allow create, update: if isAdmin();
+      allow delete: if isAdmin() && uid != eu();
+    }
+
+    // =================== OBRAS ===================
+    match /obras/{obra} {
+      // Lista: admin vê todas; os demais só as obras em que são membros
+      // (a consulta do app usa where('membrosUids','array-contains', uid)).
+      allow get: if podeVer(obra);
+      allow list: if isAdmin() || (signed() && perfil() != 'nenhum' && eu() in resource.data.get('membrosUids', []));
+      allow create: if isAdmin()
+        && novo().nome is string && novo().nome.size() > 0
+        && novo().situacao in ['nao_iniciada', 'em_andamento', 'paralisada', 'concluida'];
+      allow update: if isAdmin()
+        && novo().situacao in ['nao_iniciada', 'em_andamento', 'paralisada', 'concluida'];
+      allow delete: if isAdmin() && antigo().get('demo', false) == true;
+
+      // ---------- Mapa de andamento (páginas obras/<obra>/<bloco>.html) ----------
+      match /el/{id}  { allow read: if podeVer(obra); allow write: if podeRegistrar(obra); }
+      match /cfg/{id} { allow read: if podeVer(obra); allow write: if podeRegistrar(obra); }
+
+      // ---------- EAP: etapas, subetapas e tarefas ----------
+      match /itens/{item} {
+        allow read: if podeVer(obra);
+        // O documento codigos/<código> é criado na mesma gravação e aponta para este item.
+        allow create: if podeGerir(obra) && itemValido()
+          && getAfter(/databases/$(database)/documents/obras/$(obra)/codigos/$(novo().codigoKey)).data.itemId == item
+          && novo().get('qtdExecutada', 0) == 0;
+        allow update: if itemValido() && codigoOk(obra, item) && producaoOk(obra) && (
+          podeGerir(obra)
+          // Colaborador: só registra andamento, datas reais, observações e anexos.
+          || (podeRegistrar(obra) && mudou().hasOnly(
+               ['percentual', 'inicioReal', 'fimReal', 'observacoes', 'anexos', 'atualizadoEm', 'atualizadoPor']))
+        );
+        // Tarefa com produção lançada não é apagada (preserva o histórico).
+        allow delete: if (podeGerir(obra) && antigo().get('ultimoLanc', null) == null) || apagaDemo(obra);
+
+        function itemValido() {
+          return novo().tipo in ['etapa', 'subetapa', 'tarefa']
+            && novo().codigo is string && novo().codigo.size() > 0
+            && novo().descricao is string && novo().descricao.size() > 0
+            && novo().get('modo', 'manual') in ['manual', 'producao']
+            && (novo().get('percentual', 0) == null || (novo().get('percentual', 0) >= 0 && novo().get('percentual', 0) <= 100))
+            && (novo().get('qtdPrevista', 0) == null || novo().get('qtdPrevista', 0) >= 0)
+            && (novo().get('peso', null) == null || novo().get('peso', 0) >= 0);
+        }
+      }
+      // Código único por obra: o documento codigos/<código> aponta para o item.
+      function codigoOk(o, item) {
+        return novo().codigoKey == antigo().codigoKey
+          || getAfter(/databases/$(database)/documents/obras/$(o)/codigos/$(novo().codigoKey)).data.itemId == resource.id;
+      }
+      // Quantidade executada acumulada: só gestor/admin altera, e o app sempre grava
+      // junto (na mesma transação) o lançamento de id fixo correspondente — se o
+      // lançamento já existir, a gravação inteira é recusada e nada é somado.
+      function producaoOk(o) {
+        return novo().get('qtdExecutada', 0) == antigo().get('qtdExecutada', 0) || podeGerir(o);
+      }
+
+      match /codigos/{codigo} {
+        allow read: if podeVer(obra);
+        // create só acontece se o código ainda não existir (set num código existente é update → negado).
+        allow create: if podeGerir(obra) && novo().keys().hasOnly(['itemId', 'codigo']) && novo().itemId is string;
+        allow update: if false;
+        allow delete: if podeGerir(obra);
+      }
+
+      // ---------- Lançamentos de produção (somente inclusão) ----------
+      match /lancamentos/{lanc} {
+        allow read: if podeVer(obra);
+        allow update: if false;
+        allow delete: if apagaDemo(obra);
+        allow create: if podeGerir(obra) && novo().autorUid == eu() && novo().qtd is number && (
+          // produção de RDO aprovado: id = <rdo>__v<versão>__<tarefa>
+          (novo().tipo == 'rdo'
+            && lanc == novo().rdoId + '__v' + string(novo().versao) + '__' + novo().itemId
+            && getAfter(/databases/$(database)/documents/obras/$(obra)/rdos/$(novo().rdoId)).data.status == 'aprovado'
+            && getAfter(/databases/$(database)/documents/obras/$(obra)/rdos/$(novo().rdoId)).data.versao == novo().versao)
+          // estorno de um lançamento de RDO (reabertura ou cancelamento): id = <original>__estorno,
+          // então cada lançamento só pode ser estornado uma vez
+          || (novo().tipo == 'estorno'
+            && lanc == novo().origem + '__estorno'
+            && novo().origem.matches('^' + novo().rdoId + '__v[0-9]+__.+$')
+            && getAfter(/databases/$(database)/documents/obras/$(obra)/rdos/$(novo().rdoId)).data.status in ['rascunho', 'cancelado'])
+          // ajuste manual do gestor, sempre com motivo
+          || (novo().tipo == 'ajuste' && novo().motivo is string && novo().motivo.size() >= 3)
+        );
+      }
+
+      // ---------- Relatório Diário de Obra (id = data AAAA-MM-DD) ----------
+      match /rdos/{rdo} {
+        allow read: if podeVer(obra);
+        allow create: if podeRegistrar(obra)
+          && novo().data == rdo
+          && novo().status in ['rascunho', 'enviado']
+          && novo().autorUid == eu()
+          && novo().get('versao', 0) == 0;
+        allow update: if podeVer(obra) && novo().data == antigo().data && (
+          // edição e envio enquanto não aprovado
+          (antigo().status in ['rascunho', 'enviado'] && novo().status in ['rascunho', 'enviado']
+            && podeRegistrar(obra) && novo().versao == antigo().versao
+            && novo().get('aprovadorUid', null) == antigo().get('aprovadorUid', null))
+          // aprovação: só gestor/admin, versão sobe 1
+          || (antigo().status == 'enviado' && novo().status == 'aprovado' && podeGerir(obra)
+            && novo().versao == antigo().get('versao', 0) + 1 && novo().aprovadorUid == eu())
+          // reabrir para correção ou cancelar um aprovado (os estornos vão na mesma gravação)
+          || (antigo().status == 'aprovado' && novo().status in ['rascunho', 'cancelado'] && podeGerir(obra)
+            && novo().versao == antigo().versao)
+          // cancelar um não aprovado
+          || (antigo().status in ['rascunho', 'enviado'] && novo().status == 'cancelado' && podeGerir(obra)
+            && novo().versao == antigo().versao)
+        );
+        // Só rascunho que nunca foi aprovado pode ser apagado; depois disso, cancela.
+        allow delete: if (antigo().status == 'rascunho' && antigo().get('versao', 0) == 0
+          && (podeGerir(obra) || (podeRegistrar(obra) && antigo().autorUid == eu()))) || apagaDemo(obra);
+      }
+
+      // ---------- Arquivos (fotos comprimidas e anexos pequenos) ----------
+      match /arquivos/{arq} {
+        allow read: if podeVer(obra);
+        allow create: if podeRegistrar(obra) && novo().autorUid == eu();
+        allow update: if false;
+        allow delete: if podeGerir(obra) || (podeRegistrar(obra) && antigo().autorUid == eu());
+      }
+
+      // ---------- Histórico e série de avanço (somente inclusão) ----------
+      match /historico/{h} {
+        allow read: if podeVer(obra);
+        allow create: if podeRegistrar(obra) && novo().autorUid == eu();
+        allow update: if false;
+        allow delete: if apagaDemo(obra);
+      }
+      match /serie/{s} {
+        allow read: if podeVer(obra);
+        allow create: if podeRegistrar(obra) && novo().autorUid == eu();
+        allow update: if false;
+        allow delete: if apagaDemo(obra);
+      }
+    }
+  }
+}

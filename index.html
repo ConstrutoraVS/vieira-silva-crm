@@ -90,6 +90,7 @@
       document.getElementById('module-hub').style.display='none';
       document.getElementById('obras-app').style.display='none';
       [unsubPropostas,unsubAlertas,unsubClientes,unsubUsuarios,unsubCompradores].forEach(u=>u&&u());
+      if (_go) _go.then(g=>g.parar()).catch(()=>{});
     }
   });
 
@@ -117,7 +118,7 @@
   // `perfis`: quem pode entrar. Visualizador só acompanha obras.
   const MODULOS = {
     comercial:      { pronto: true,  tela: 'main-app',  perfis: ['admin','operador'] },
-    rdo:            { pronto: false, tela: null },
+    rdo:            { pronto: true,  tela: 'obras-app', perfis: ['admin','operador','visualizador'] },
     acompanhamento: { pronto: true,  tela: 'obras-app', perfis: ['admin','operador','visualizador'] }
   };
   const podeEntrar = m => m && m.pronto && (!m.perfis || m.perfis.includes(currentUserRole));
@@ -132,6 +133,7 @@
       hub.style.display='none';
       document.getElementById(MODULOS[alvo].tela).style.display='block';
       if (alvo === 'acompanhamento') window.rotearObras(partes.slice(1));
+      else if (alvo === 'rdo') window.rotearObras([], 'rdo');
     } else {
       hub.style.display='flex';
       atualizarCardsHub();
@@ -161,127 +163,22 @@
 
   window.voltarModulos = () => { location.hash = ''; history.replaceState(null,'',location.pathname); window.rotearModulo(); };
 
-  // ---- ACOMPANHAMENTO DE OBRAS ----
-  // Cadastro das obras em obras/obras.json; o mapa de cada bloco é uma página própria
-  // (obras/<obra>/<bloco>.html) carregada num iframe. Andamento em Firestore: obras/<obra>/el/<id>.
-  let OBRAS = null;
-  const escObra = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
-
-  async function carregarObras(){
-    if (OBRAS) return OBRAS;
-    const r = await fetch('obras/obras.json', { cache: 'no-cache' });
-    if (!r.ok) throw new Error('obras.json ' + r.status);
-    OBRAS = await r.json();
-    return OBRAS;
-  }
-
-  window.rotearObras = async (partes) => {
-    const [obraId, aba, blocoId] = partes;
-    const lista = document.getElementById('obras-lista');
-    const det = document.getElementById('obra-detalhe');
-    try { await carregarObras(); }
-    catch(e){ lista.style.display='block'; det.style.display='none'; lista.innerHTML = '<div class="empty">Não foi possível carregar a lista de obras.</div>'; return; }
-    const obra = obraId && OBRAS.find(o => o.id === obraId);
-    if (!obra) { det.style.display='none'; lista.style.display='block'; renderListaObras(); return; }
-    lista.style.display='none'; det.style.display='block';
-    renderObra(obra, aba === 'cronograma' ? 'cronograma' : 'mapa', blocoId);
-  };
-
-  function renderListaObras(){
-    const el = document.getElementById('obras-lista');
-    el.innerHTML = `<div class="obras-intro"><h2>Obras</h2><p>Escolha a obra para ver o mapa de andamento e o cronograma.</p></div>
-      <div class="obras-grid">${OBRAS.map(o => {
-        const comMapa = o.blocos.filter(b => b.pagina).map(b => b.nome);
-        return `<a class="obra-card" href="#acompanhamento/${encodeURIComponent(o.id)}">
-          <div class="obra-card-top"><span class="obra-status">${escObra(o.status||'')}</span></div>
-          <div class="obra-nome">${escObra(o.nome)}</div>
-          <div class="obra-end">${escObra(o.endereco||'')}</div>
-          <dl class="obra-meta">
-            ${o.projeto?`<dt>Projeto</dt><dd>${escObra(o.projeto)}</dd>`:''}
-            <dt>Mapa</dt><dd>${comMapa.length?escObra(comMapa.join(', ')):'—'} <span class="obra-sub">(${comMapa.length} de ${o.blocos.length} blocos)</span></dd>
-            <dt>Cronograma</dt><dd>${o.cronograma?'Importado':'<span class="obra-sub">Aguardando importação</span>'}</dd>
-          </dl>
-          <div class="obra-go">Abrir obra →</div>
-        </a>`;}).join('')}</div>`;
-  }
-
-  function renderObra(obra, aba, blocoId){
-    const blocos = obra.blocos.filter(b => b.pagina);
-    const bloco = blocos.find(b => b.id === blocoId) || blocos[0];
-    document.getElementById('obra-titulo').textContent = obra.nome;
-    document.getElementById('obra-sub').textContent = [obra.endereco, obra.projeto && ('projeto ' + obra.projeto)].filter(Boolean).join(' · ');
-    const base = '#acompanhamento/' + encodeURIComponent(obra.id);
-    document.getElementById('obra-tabs').innerHTML =
-      `<a class="tab ${aba==='mapa'?'active':''}" href="${base}/mapa${bloco?'/'+bloco.id:''}">🗺️ Mapa de andamento</a>
-       <a class="tab ${aba==='cronograma'?'active':''}" href="${base}/cronograma">📅 Cronograma</a>`;
-    const corpo = document.getElementById('obra-corpo');
-    if (aba === 'cronograma') {
-      corpo.innerHTML = obra.cronograma ? '' : `<div class="obra-vazio">
-        <div class="obra-vazio-ic">📅</div>
-        <h3>Cronograma ainda não importado</h3>
-        <p>O cronograma desta obra vai aparecer aqui, com as etapas previstas e o avanço real ao lado.</p>
-      </div>`;
-      return;
-    }
-    if (!bloco) { corpo.innerHTML = '<div class="obra-vazio"><h3>Nenhum bloco com mapa ainda</h3></div>'; return; }
-    // a troca de pavimento fica nas abas do próprio mapa (links para #acompanhamento/<obra>/mapa/<bloco>)
-    const chips = '';
-    // mantém o iframe se já estiver no mesmo bloco (evita recarregar o mapa)
-    const atual = document.getElementById('obra-frame');
-    if (atual && atual.dataset.src === bloco.pagina && !corpo.querySelector('.obra-vazio')) {
-      const c = corpo.querySelector('.obra-blocos'); if (c) c.outerHTML = chips;
-    } else {
-      corpo.innerHTML = `<div id="obra-migracao"></div>${chips}<iframe id="obra-frame" class="obra-frame" data-src="${bloco.pagina}" src="${bloco.pagina}" title="Mapa de andamento — ${escObra(obra.nome)} ${escObra(bloco.nome)}"></iframe>`;
-    }
-    verificarMigracao(obra);
-  }
-
-  // Importação única do andamento que estava na página antiga (só admin).
-  async function verificarMigracao(obra){
-    const box = document.getElementById('obra-migracao');
-    if (!box) return;
-    box.innerHTML = '';
-    if (!obra.migracao || currentUserRole !== 'admin') return;
-    try {
-      const flag = await getDoc(doc(db, 'obras', obra.id, 'cfg', 'migracao'));
-      if (flag.exists()) return;
-    } catch(e) {
-      console.error('verificarMigracao', e);
-      box.innerHTML = `<div class="migr-banner erro"><div><b>Não consegui ler o banco desta obra</b>
-        <span>Motivo: ${escObra((e && (e.code || e.message)) || e)}. Se for "permission-denied", confira as regras do Firestore para obras.</span></div></div>`;
-      return;
-    }
-    box.innerHTML = `<div class="migr-banner"><div><b>Importar o andamento já marcado</b>
-      <span>${obra.migracao.registros} registros da página antiga deste mapa ainda não foram trazidos para o sistema.</span></div>
-      <button class="btn-migr" id="btn-migr">Importar agora</button></div>`;
-    document.getElementById('btn-migr').onclick = () => importarMigracao(obra);
-  }
-
-  async function importarMigracao(obra){
-    const btn = document.getElementById('btn-migr');
-    if (!confirm(`Importar ${obra.migracao.registros} registros de andamento para ${obra.nome}?\n\nO que já estiver marcado no sistema é mantido; os registros importados são somados por cima.`)) return;
-    btn.disabled = true; btn.textContent = 'Importando…';
-    try {
-      const r = await fetch(obra.migracao.arquivo, { cache: 'no-cache' });
-      const pacote = await r.json();
-      const entradas = Object.entries(pacote.docs);
-      for (let i = 0; i < entradas.length; i += 400) {
-        const b = writeBatch(db);
-        entradas.slice(i, i + 400).forEach(([id, data]) => b.set(doc(db, 'obras', obra.id, pacote.colecao, id), data, { merge: true }));
-        await b.commit();
-      }
-      await setDoc(doc(db, 'obras', obra.id, 'cfg', 'migracao'), {
-        feito: true, registros: entradas.length, arquivo: obra.migracao.arquivo,
-        por: auth.currentUser.uid, em: serverTimestamp()
-      });
-      document.getElementById('obra-migracao').innerHTML = '';
-      showToast(`${entradas.length} registros importados`);
-    } catch(e) {
+  // ---- GESTÃO E ACOMPANHAMENTO DE OBRAS ----
+  // Todo o módulo (obras, EAP, RDO, painel, mapa) fica em obras/gestao-obras.js.
+  // Import dinâmico: se o módulo falhar, o Comercial continua funcionando.
+  let _go = null;
+  const carregarGO = () => _go || (_go = import('./obras/gestao-obras.js').then(m =>
+    m.iniciarGestaoObras({ db, auth, perfil: () => currentUserRole, showToast })
+  ).catch(e => { _go = null; throw e; }));
+  window.rotearObras = async (partes, modo) => {
+    try { (await carregarGO()).rotear(partes, modo); }
+    catch (e) {
       console.error(e);
-      btn.disabled = false; btn.textContent = 'Tentar de novo';
-      showToast(e && e.code === 'permission-denied' ? 'Sem permissão no banco — confira as regras do Firestore' : 'Não foi possível importar agora');
+      document.getElementById('obra-detalhe').style.display = 'none';
+      const l = document.getElementById('obras-lista'); l.style.display = 'block';
+      l.innerHTML = '<div class="obra-vazio"><h3>Não foi possível carregar o módulo de obras</h3><p>' + String(e && e.message || e).replace(/</g,'&lt;') + '</p></div>';
     }
-  }
+  };
 
   window.addEventListener('hashchange', () => window.rotearModulo());
 
@@ -2139,17 +2036,17 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;backgrou
         <div class="hub-foot"><span class="hub-status on">● Disponível</span><span class="hub-go">Entrar →</span></div>
       </button>
 
-      <button class="hub-card soon" style="--accent:#E09B00;--accent-bg:#FFF4DB" onclick="abrirModulo('rdo')">
+      <button class="hub-card" data-modulo="rdo" style="--accent:#E09B00;--accent-bg:#FFF4DB" onclick="abrirModulo('rdo')">
         <div class="hub-icon">📝</div>
         <div class="hub-name">RDO</div>
-        <div class="hub-desc">Relatório Diário de Obra — clima, efetivo, equipamentos, atividades executadas, ocorrências e fotos do dia.</div>
-        <div class="hub-foot"><span class="hub-status soon">Em breve</span><span class="hub-go">Entrar →</span></div>
+        <div class="hub-desc">Relatório Diário de Obra — clima, efetivo, equipamentos, atividades executadas, ocorrências e fotos do dia, com aprovação do gestor.</div>
+        <div class="hub-foot"><span class="hub-status on">● Disponível</span><span class="hub-go">Entrar →</span></div>
       </button>
 
       <button class="hub-card" data-modulo="acompanhamento" style="--accent:#1D9E75;--accent-bg:#E1F5EE" onclick="abrirModulo('acompanhamento')">
         <div class="hub-icon">🏗️</div>
-        <div class="hub-name">Acompanhamento de Projetos</div>
-        <div class="hub-desc">Mapa de andamento por ambiente e parede, apontamentos diários, medição e cronograma de cada obra.</div>
+        <div class="hub-name">Gestão e Acompanhamento de Obras</div>
+        <div class="hub-desc">Cadastro das obras e equipes, etapas e tarefas (EAP), produção, painel de avanço e mapa de andamento por ambiente.</div>
         <div class="hub-foot"><span class="hub-status on">● Disponível</span><span class="hub-go">Entrar →</span></div>
       </button>
     </div>

@@ -37,6 +37,18 @@
     if (!user) throw { code: "unauthenticated" };
     let role = "operador";
     try { const d = await F.getDoc(F.doc(db, "usuarios", user.uid)); if (d.exists()) role = d.data().role || "operador"; } catch (e) {}
+    // Obra já cadastrada no módulo de Gestão de Obras: vale o papel na equipe da obra
+    // (Consulta só vê; Gestor/Colaborador editam o mapa). Admin edita sempre.
+    if (role !== "admin") {
+      try {
+        const o = await F.getDoc(F.doc(db, "obras", OBRA));
+        const membros = o.exists() && o.data().membros;
+        if (membros) {
+          const p = role === "visualizador" ? "" : (membros[user.uid] || "");
+          role = (p === "gestor" || p === "colaborador") ? "operador" : "visualizador";
+        }
+      } catch (e) {}
+    }
     return { F, db, user, role };
   })();
 
